@@ -1,0 +1,187 @@
+"""Session state helpers shared across Streamlit pages."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import date
+from typing import Any, Dict, Iterable, List
+
+import streamlit as st
+
+from models.entities import Transaction
+from utils.i18n import I18n
+
+
+DEFAULT_STATE: Dict[str, Any] = {
+    "transactions": [],
+    "ocr_raw_text": "",
+    "ocr_results": [],
+    "analysis_summary": [],
+    "chat_history": [],
+    "user_profile": None,
+    "product_recommendations": [],
+    "anomaly_flags": [],
+    "anomaly_history": [],
+    "trusted_merchants": [],
+    "anomaly_message": "",
+    "locale": "zh_CN",
+    "chat_cache": {},
+}
+
+
+def init_session_state() -> None:
+    """Ensure every expected key exists in `st.session_state`."""
+    for key, default_value in DEFAULT_STATE.items():
+        if key not in st.session_state:
+            if isinstance(default_value, list):
+                st.session_state[key] = list(default_value)
+            elif isinstance(default_value, dict):
+                st.session_state[key] = dict(default_value)
+            else:
+                st.session_state[key] = default_value
+
+    if "i18n" not in st.session_state:
+        st.session_state["i18n"] = I18n(st.session_state.get("locale", "zh_CN"))
+
+
+def reset_session_state(keys: List[str] | None = None) -> None:
+    """Clear selected session keys, or all known keys when omitted."""
+    target_keys = keys if keys is not None else list(DEFAULT_STATE.keys())
+    for key in target_keys:
+        if key in st.session_state:
+            del st.session_state[key]
+
+
+def _normalize_transaction(entry: Transaction | dict) -> Transaction:
+    if isinstance(entry, Transaction):
+        return entry
+    return Transaction(**entry)
+
+
+def get_transactions() -> List[Transaction]:
+    """Return transactions stored in session as `Transaction` models."""
+    return [_normalize_transaction(entry) for entry in st.session_state.get("transactions", [])]
+
+
+def set_transactions(transactions: Iterable[Transaction | dict]) -> None:
+    """Persist a new transaction list into session state."""
+    serialized = []
+    for txn in transactions:
+        if isinstance(txn, Transaction):
+            serialized.append(txn.model_dump())
+        elif isinstance(txn, dict):
+            serialized.append(txn)
+    st.session_state["transactions"] = serialized
+
+
+def get_trusted_merchants() -> List[str]:
+    """Return the merchant whitelist."""
+    merchants = st.session_state.get("trusted_merchants", [])
+    if isinstance(merchants, list):
+        return list(dict.fromkeys(m.strip() for m in merchants if m))
+    return []
+
+
+def add_trusted_merchant(name: str) -> None:
+    """Add a merchant to the whitelist if not already present."""
+    name = name.strip()
+    if not name:
+        return
+    merchants = get_trusted_merchants()
+    if name not in merchants:
+        merchants.append(name)
+        st.session_state["trusted_merchants"] = merchants
+
+
+def remove_trusted_merchant(name: str) -> None:
+    """Remove a merchant from the whitelist."""
+    merchants = [m for m in get_trusted_merchants() if m != name]
+    st.session_state["trusted_merchants"] = merchants
+
+
+def _serialize_anomaly(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure anomaly data is JSON-serialisable before storing."""
+    result = deepcopy(record)
+    if isinstance(result.get("date"), date):
+        result["date"] = result["date"].isoformat()
+    return result
+
+
+def get_active_anomalies() -> List[Dict[str, Any]]:
+    """Return current active anomalies."""
+    return [dict(item) for item in st.session_state.get("anomaly_flags", [])]
+
+
+def get_anomaly_history() -> List[Dict[str, Any]]:
+    """Return resolved anomalies with user feedback."""
+    return [dict(item) for item in st.session_state.get("anomaly_history", [])]
+
+
+def update_anomaly_state(
+    *,
+    active: Iterable[Dict[str, Any]] | None = None,
+    history: Iterable[Dict[str, Any]] | None = None,
+    message: str | None = None,
+) -> None:
+    """Persist anomaly state back into session."""
+    if active is not None:
+        st.session_state["anomaly_flags"] = [_serialize_anomaly(item) for item in active]
+    if history is not None:
+        st.session_state["anomaly_history"] = [_serialize_anomaly(item) for item in history]
+    if message is not None:
+        st.session_state["anomaly_message"] = message
+
+
+def record_anomaly_feedback(anomaly: Dict[str, Any], status: str) -> None:
+    """Store user feedback for a specific anomaly."""
+    anomaly_id = anomaly.get("transaction_id")
+    record = dict(anomaly)
+    record["status"] = status
+    existing = [
+        item
+        for item in get_anomaly_history()
+        if item.get("transaction_id") != anomaly_id
+    ]
+    existing.append(record)
+    update_anomaly_state(history=existing)
+
+
+def sync_anomaly_state(report: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Merge freshly detected anomalies with existing user feedback.
+
+    Returns the active anomalies list for immediate use.
+    """
+    history_map = {
+        item.get("transaction_id"): item for item in get_anomaly_history()
+    }
+    active: List[Dict[str, Any]] = []
+    for anomaly in report.get("items", []):
+        anomaly = dict(anomaly)
+        txn_id = anomaly.get("transaction_id")
+        history = history_map.get(txn_id)
+        if history and history.get("status") in {"confirmed", "fraud"}:
+            continue
+        if history:
+            anomaly["status"] = history.get("status", "review")
+        active.append(anomaly)
+    update_anomaly_state(active=active, message=report.get("message"))
+    return active
+
+
+def get_i18n() -> I18n:
+    """Return the current I18n instance from session."""
+    init_session_state()
+    i18n = st.session_state.get("i18n")
+    if isinstance(i18n, I18n):
+        return i18n
+    i18n = I18n(st.session_state.get("locale", "zh_CN"))
+    st.session_state["i18n"] = i18n
+    return i18n
+
+
+def switch_locale(locale: str) -> None:
+    """Switch application locale and refresh I18n instance."""
+    st.session_state["locale"] = locale
+    i18n = get_i18n()
+    i18n.switch_locale(locale)

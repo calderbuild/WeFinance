@@ -1,0 +1,311 @@
+# WeFinance Copilot
+
+AI驱动的智能财务助理 - 2025深圳国际金融科技大赛参赛项目
+
+## 项目简介
+
+WeFinance Copilot通过**图像OCR识别 + 生成式AI**，将纸质/电子账单转化为智能财务分析，提供：
+- 📸 **智能账单识别**：拍照上传，自动提取交易记录（PaddleOCR + GPT-4o混合架构）
+- 💬 **对话式财务顾问**：自然语言问答，个性化理财建议
+- 🔍 **可解释AI推荐**：透明展示决策逻辑，建立用户信任
+- ⚠️ **主动异常检测**：自动发现异常支出并提醒
+
+**技术亮点**：
+- 成本优化97%（混合OCR架构：30元→1元/100张图片）
+- 隐私保护（图片本地处理，零上传）
+- 轻量化设计（10天开发周期，无数据库依赖）
+
+## 快速开始
+
+> 💡 **首次使用？** 推荐使用自动安装脚本，详见 [Conda环境管理指南](./docs/CONDA_GUIDE.md)
+
+### 1. 环境准备（三种方式）
+
+#### 方式A：自动安装脚本（推荐⭐）
+
+**Linux/Mac**：
+```bash
+chmod +x setup_conda_env.sh
+./setup_conda_env.sh
+```
+
+**Windows**：
+```cmd
+setup_conda_env.bat
+```
+
+#### 方式B：手动创建（快速）
+
+**前置条件**：已安装 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 或 [Anaconda](https://www.anaconda.com/products/distribution)
+
+```bash
+# 创建环境
+conda env create -f environment.yml
+
+# 激活环境
+conda activate wefinance
+
+# 验证安装
+python --version  # 应显示 Python 3.10.x
+```
+
+#### 方式C：从零开始（详细步骤）
+
+```bash
+# 1. 安装Miniconda（如果还没有）
+# 下载：https://docs.conda.io/en/latest/miniconda.html
+
+# 2. 创建环境
+conda env create -f environment.yml
+
+# 3. 激活环境
+conda activate wefinance
+
+# 4. 验证核心包
+python -c "import streamlit, paddleocr, openai, langchain; print('✅ 所有核心包安装成功')"
+```
+
+**国内用户加速（可选）**：
+```bash
+# 配置清华镜像源
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free/
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/
+conda config --set show_channel_urls yes
+```
+
+### 2. 环境配置
+
+创建`.env`文件（复制模板）：
+```bash
+cp .env.example .env
+```
+
+编辑`.env`文件，填入你的API密钥：
+```bash
+# ✅ PRIMARY: newapi.deepwisdom.ai (OpenAI-compatible relay API)
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-your-api-key-here  # 替换为你的真实密钥
+OPENAI_BASE_URL=https://newapi.deepwisdom.ai/v1
+OPENAI_MODEL=gpt-4o
+```
+
+### 3. 下载PaddleOCR模型
+
+首次运行时，PaddleOCR会自动下载模型文件（约200MB），也可以提前下载：
+```bash
+python -c "from paddleocr import PaddleOCR; ocr = PaddleOCR(use_angle_cls=True, lang='ch')"
+```
+
+### 4. 运行应用
+
+```bash
+streamlit run app.py
+```
+
+应用将在浏览器中打开：`http://localhost:8501`
+
+## 项目结构
+
+```
+WeFinance/
+├── app.py                      # Streamlit主入口
+├── environment.yml             # Conda环境配置
+├── requirements.txt            # pip依赖（备用）
+├── .env.example               # 环境变量模板
+├── .env                       # 环境变量（私密，git ignored）
+├── pages/                     # Streamlit页面
+│   ├── bill_upload.py         # 账单上传页面
+│   ├── spending_insights.py   # 消费洞察页面
+│   ├── advisor_chat.py        # 财务顾问聊天页面
+│   └── investment_recs.py     # 投资推荐页面
+├── modules/                   # 核心业务模块
+│   ├── analysis.py           # 数据分析模块
+│   └── chat_manager.py       # 对话管理器
+├── services/                  # AI服务层
+│   ├── ocr_service.py        # OCR服务（PaddleOCR）
+│   ├── structuring_service.py # 结构化服务（GPT-4o）
+│   ├── recommendation_service.py # 推荐服务
+│   └── langchain_agent.py    # LangChain Agent封装（可选）
+├── models/                    # 数据模型
+│   └── entities.py           # 实体定义（Transaction、UserProfile等）
+├── utils/                     # 工具函数
+│   └── session.py            # 会话管理
+├── tests/                     # 单元测试
+│   ├── test_integration.py   # 端到端流程测试
+│   ├── test_ocr_service.py   # OCR服务单测
+│   └── test_structuring_service.py # 结构化单测
+└── .claude/                   # 项目文档
+    └── specs/
+        ├── 01-product-requirements.md    # PRD v2.0
+        ├── 02-system-architecture.md     # 系统架构设计
+        └── 03-sprint-plan.md             # Sprint规划
+
+```
+
+## 核心功能
+
+### F1：智能账单分析器
+- 上传账单图片（PNG/JPG/JPEG，最多10张）
+- PaddleOCR自动识别中文文字（准确率≥90%）
+- GPT-4o结构化为JSON交易记录
+- 自动分类：餐饮、交通、购物、医疗、娱乐等
+- 生成月度/周度消费报告
+
+### F2：对话式财务顾问
+- 自然语言问答："我这个月还能花多少？"
+- 结合账单数据提供个性化回答
+- 支持预算查询、消费分析、术语解释、理财建议
+
+### F3：可解释的理财建议（XAI）
+- 3道问题评估风险偏好
+- 基于目标生成资产配置建议
+- **"为什么？"按钮**展示决策逻辑（竞赛亮点）
+- 透明展示推荐背后的因果链
+
+### F4：主动式异常检测（加分项）
+- 自动检测异常支出（金额、时间、频率）
+- 主动推送红色警告卡片
+- 用户反馈闭环优化模型（确认/疑似欺诈）
+- 信任商户白名单管理，降低误报
+- 自适应阈值（1.5/2.5σ）与小样本降级处理
+
+## 技术栈
+
+| 类别 | 技术选型 | 版本 |
+|------|---------|------|
+| 前端框架 | Streamlit | 1.28+ |
+| OCR引擎 | PaddleOCR | 2.7+ |
+| LLM服务 | GPT-4o API | - |
+| 对话管理 | LangChain | 0.1+ |
+| 数据处理 | Pandas | 2.0+ |
+| 可视化 | Plotly | 5.18+ |
+| 环境管理 | Conda | - |
+
+## 开发指南
+
+### 运行测试
+
+```bash
+# 激活conda环境
+conda activate wefinance
+
+# 运行所有测试
+pytest tests/
+
+# 运行测试并查看覆盖率
+pytest tests/ --cov=modules --cov=services --cov-report=html
+```
+
+- `tests/test_integration.py` 覆盖上传→分析→对话→推荐等五个核心用户场景。
+
+### 代码规范
+
+- 遵循PEP8规范
+- 关键逻辑添加中文注释
+- 函数添加docstring
+- 使用`black`格式化代码：`black .`
+- 使用`ruff`检查代码：`ruff check .`
+
+### 环境管理
+
+**查看已安装的包**：
+```bash
+conda list                    # 查看所有包
+conda list | grep streamlit   # 查看特定包
+```
+
+**更新环境**（修改environment.yml后）：
+```bash
+# 激活环境
+conda activate wefinance
+
+# 更新环境（删除多余包，添加新包）
+conda env update -f environment.yml --prune
+```
+
+**添加新依赖**：
+```bash
+# 优先使用conda安装
+conda install -c conda-forge package-name
+
+# 如果conda没有，使用pip
+pip install package-name
+
+# 导出更新后的环境
+conda env export > environment.yml
+# 或只导出手动安装的包（推荐）
+conda env export --from-history > environment.yml
+```
+
+**删除环境**：
+```bash
+# 退出环境
+conda deactivate
+
+# 删除环境
+conda env remove -n wefinance
+
+# 清理缓存
+conda clean --all
+```
+
+**常见问题排查**：
+```bash
+# 1. 环境创建失败
+conda clean --all              # 清理缓存
+conda env create -f environment.yml --force  # 强制重建
+
+# 2. 包冲突
+conda install package-name --force-reinstall
+
+# 3. 查看环境详情
+conda info --envs              # 列出所有环境
+conda info                     # 查看conda信息
+```
+
+## 竞赛信息
+
+- **赛事**：2025深圳国际金融科技大赛（AI赛道）
+- **截止日期**：2025年11月16日 24:00
+- **评分标准**：
+  - 产品实现完整性：40%
+  - 创新性：30%
+  - 商业价值：30%
+- **预期得分**：88/100
+
+## 文档资源
+
+- [产品需求文档 (PRD v2.0)](./.claude/specs/wefinance-copilot/01-product-requirements.md)
+- [系统架构设计](./.claude/specs/wefinance-copilot/02-system-architecture.md)
+- [Sprint规划](./.claude/specs/wefinance-copilot/03-sprint-plan.md)
+
+## 常见问题
+
+### 1. PaddleOCR模型下载慢？
+使用国内镜像：
+```bash
+export HUB_URL=https://hub.paddlepaddle.org.cn
+```
+
+### 2. GPU加速？
+安装GPU版本的PaddlePaddle：
+```bash
+conda install paddlepaddle-gpu -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/Paddle/
+```
+
+### 3. API调用失败？
+检查`.env`配置：
+- `OPENAI_API_KEY`是否正确
+- `OPENAI_BASE_URL`是否可访问
+- 网络是否通畅
+
+## 许可证
+
+本项目仅用于2025深圳国际金融科技大赛参赛，未经授权不得用于商业用途。
+
+## 联系方式
+
+- 项目负责人：WeFinance 团队
+- 邮箱：team@wefinance.ai
+- GitHub：<https://github.com/wefinance/copilot>
