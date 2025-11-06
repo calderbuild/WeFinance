@@ -285,13 +285,6 @@ def main() -> None:
             st.success(i18n.t("app.reset_success"))
             st.rerun()
 
-        st.divider()
-        st.caption(
-            f"{i18n.t('app.sidebar_version', version='0.1.0')}\n"
-            f"{i18n.t('app.sidebar_competition')}\n"
-            f"{i18n.t('app.sidebar_goal')}"
-        )
-
     render = PAGES.get(selection)
     if render is None:
         st.error(i18n.t("errors.page_missing"))
