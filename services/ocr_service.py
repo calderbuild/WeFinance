@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import BinaryIO, Iterable, List, Optional
+from typing import Any, BinaryIO, Iterable, List, Optional
 
 from models.entities import OCRParseResult, Transaction
 from services.vision_ocr_service import VisionOCRService
@@ -29,7 +29,7 @@ class OCRService:
         self,
         use_angle_class: bool = True,
         lang: str = "ch",
-        structuring_service: Optional = None,
+        structuring_service: Optional[Any] = None,
     ) -> None:
         """
         初始化OCR服务
