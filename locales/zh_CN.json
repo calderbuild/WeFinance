@@ -86,12 +86,16 @@
     "structuring_fail": "结构化解析失败，请稍后重试。",
     "llm_fail": "抱歉，暂时无法连接到AI服务，请稍后再试。错误信息：{error}",
     "langchain_fail": "LangChain代理暂不可用。",
-    "api_key_missing": "未配置OPENAI_API_KEY，请在环境变量或 .env 中设置。"
+    "api_key_missing": "未配置OPENAI_API_KEY，请在环境变量或 .env 中设置。",
+    "file_too_large": "文件 {filename} 超过 {size}MB 上传限制。",
+    "file_too_large_suggestion": "请压缩或拆分文件后再上传，或改用CSV/手动输入。",
+    "pdf_render_fail": "无法解析PDF文件 {filename}，请确认文件未加密且可正常打开。",
+    "pdf_render_fail_suggestion": "可尝试重新导出为标准PDF或转成图片后再次上传。"
   },
   "bill_upload": {
     "title": "📤 账单上传与OCR识别",
-    "subtitle": "将账单图片或PDF拖入此处，系统会自动完成OCR识别与结构化处理。",
-    "uploader_help": "支持PNG、JPG和PDF格式，一次最多10个文件。",
+    "subtitle": "将账单图片、PDF或CSV拖入此处，系统会自动完成OCR识别与结构化处理。",
+    "uploader_help": "支持PNG、JPG、JPEG、PDF、CSV；单文件不超过 {size}MB，可一次上传至多10个文件。",
     "empty": "尚未选择文件。上传后可在此查看OCR结果和解析日志。",
     "success": "成功解析 {count} 条交易记录。",
     "warning_no_txn": "未从上传文件中提取到交易记录，您可以尝试重新上传更清晰的账单。",
@@ -150,7 +154,10 @@
     "file_process_error": "文件 {filename} 处理失败：{error}",
     "all_files_processed": "✅ 完成！共处理 {total} 个文件，识别 {transactions} 笔交易",
     "fallback_option": "备选方案",
-    "manual_entry_btn": "改用手动输入"
+    "manual_entry_btn": "改用手动输入",
+    "file_too_large": "文件 {filename} 超过 {size}MB 上传限制，请压缩或拆分后再尝试。",
+    "csv_import_success": "{filename} 导入成功，共 {count} 条交易。",
+    "csv_import_error": "{filename} 导入失败：{error}"
   },
   "spending": {
     "title": "📊 消费分析仪表盘",

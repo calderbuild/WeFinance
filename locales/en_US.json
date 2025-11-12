@@ -86,12 +86,16 @@
     "structuring_fail": "Structuring failed. Please try again later.",
     "llm_fail": "Sorry, the AI service is temporarily unavailable. Please retry later. Details: {error}",
     "langchain_fail": "LangChain agent is currently unavailable.",
-    "api_key_missing": "OPENAI_API_KEY is not configured. Please set it via environment variable or .env."
+    "api_key_missing": "OPENAI_API_KEY is not configured. Please set it via environment variable or .env.",
+    "file_too_large": "File {filename} exceeds the {size}MB upload limit.",
+    "file_too_large_suggestion": "Compress or split the document before retrying, or switch to CSV/manual input.",
+    "pdf_render_fail": "Unable to parse PDF file {filename}. Please ensure it is not encrypted.",
+    "pdf_render_fail_suggestion": "Re-export it as a standard PDF or image set, then upload again."
   },
   "bill_upload": {
     "title": "📤 Bill Upload & OCR",
-    "subtitle": "Drag bill images or PDFs here. The system will automatically perform OCR and structuring.",
-    "uploader_help": "Supports PNG, JPG, and PDF (up to 10 files at a time).",
+    "subtitle": "Drop bill images, PDFs, or CSV files here for automatic OCR and structuring.",
+    "uploader_help": "PNG, JPG, JPEG, PDF, CSV up to {size}MB each; upload up to 10 files at once.",
     "empty": "No files selected yet. Upload bills to view OCR and parsing results here.",
     "success": "Parsed {count} transactions successfully.",
     "warning_no_txn": "No transactions extracted. Please upload a clearer bill.",
@@ -150,7 +154,10 @@
     "file_process_error": "Failed to process {filename}: {error}",
     "all_files_processed": "✅ Done! Processed {total} file(s), recognized {transactions} transaction(s)",
     "fallback_option": "Alternative Option",
-    "manual_entry_btn": "Switch to Manual Entry"
+    "manual_entry_btn": "Switch to Manual Entry",
+    "file_too_large": "File {filename} exceeds the {size}MB upload limit. Please compress or split it.",
+    "csv_import_success": "{filename} imported {count} transactions successfully.",
+    "csv_import_error": "Failed to import {filename}: {error}"
   },
   "spending": {
     "title": "📊 Spending Analysis Dashboard",

@@ -78,10 +78,17 @@ class VisionOCRService:
 
 要求：
 1. 识别账单中的每一笔交易
-2. 提取以下字段：日期(date)、商户名称(merchant)、分类(category)、金额(amount)
-3. 日期格式：YYYY-MM-DD
-4. 金额为数字，不带货币符号
-5. 分类从以下选择：餐饮、交通、购物、娱乐、医疗、教育、其他
+2. 提取以下字段：
+   - date: 日期（YYYY-MM-DD格式）
+   - merchant: 商户名称（保持原文，不翻译）
+   - category: 分类（从以下选择：餐饮、交通、购物、娱乐、医疗、教育、其他）
+   - amount: 总金额（数字，不带货币符号）
+   - currency: 货币代码（识别收据上的货币符号：RM→MYR, ¥→CNY, $→USD, S$→SGD, 无符号默认CNY）
+3. 如果是详细收据（有商品明细），提取：
+   - line_items: 商品明细数组（每项包含 description, quantity, unit_price, amount）
+   - subtotal: 小计（折扣前金额）
+   - total_discount: 总折扣金额
+   - receipt_number: 收据编号（如 Document No, Receipt No, Cash Bill）
 
 返回格式（纯JSON数组，不要markdown代码块）：
 [
@@ -89,7 +96,28 @@ class VisionOCRService:
     "date": "2025-11-01",
     "merchant": "星巴克",
     "category": "餐饮",
-    "amount": 45.0
+    "amount": 45.0,
+    "currency": "CNY"
+  }
+]
+
+详细收据示例：
+[
+  {
+    "date": "2018-12-25",
+    "merchant": "BOOK TA.K (TAMAN DAYA) SDN BHD",
+    "category": "购物",
+    "amount": 9.0,
+    "currency": "MYR",
+    "line_items": [
+      {
+        "description": "RF MODELLING CLAY KIDDY FISH",
+        "quantity": 1,
+        "unit_price": 9.0,
+        "amount": 9.0
+      }
+    ],
+    "receipt_number": "TD01167104"
   }
 ]
 
@@ -137,12 +165,32 @@ class VisionOCRService:
             transactions = []
             for idx, item in enumerate(transactions_data):
                 try:
+                    # 处理商品明细（如果有）
+                    line_items_data = item.get("line_items", [])
+                    from models.entities import LineItem
+                    line_items = [
+                        LineItem(**li) for li in line_items_data
+                    ] if line_items_data else []
+
+                    # 处理收据时间（如果有）
+                    receipt_time = None
+                    if "receipt_time" in item:
+                        from datetime import datetime
+                        receipt_time = datetime.fromisoformat(item["receipt_time"])
+
                     txn = Transaction(
                         id=str(idx + 1),
                         date=item["date"],
                         merchant=item["merchant"],
                         category=item["category"],
                         amount=float(item["amount"]),
+                        currency=item.get("currency", "CNY"),  # 默认人民币
+                        line_items=line_items,
+                        subtotal=item.get("subtotal"),
+                        total_discount=item.get("total_discount"),
+                        tax=item.get("tax"),
+                        receipt_number=item.get("receipt_number"),
+                        receipt_time=receipt_time,
                     )
                     transactions.append(txn)
                 except (KeyError, ValueError) as e:

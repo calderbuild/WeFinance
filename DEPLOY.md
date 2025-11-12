@@ -8,8 +8,8 @@
 ## 2. Streamlit Community Cloud（推荐）
 ### 2.1 仓库准备
 1. 根目录包含 `app.py`、`requirements.txt`，以及 `.streamlit/config.toml`（端口/主题）与 `.streamlit/secrets.toml.example`（供拷贝到 Cloud Secrets）。
-2. **无需系统依赖**：项目已完全移除 PaddleOCR，100% 使用 GPT-4o Vision API，不需要 `packages.txt` 或系统库。
-3. 在本地执行 `streamlit run app.py` 确认 UI、Vision OCR、LLM 调用均可用，再推送到 GitHub。
+2. 若需要系统依赖，可创建 `packages.txt`（例：`libgl1`、`libglib2.0-0`）。多数场景可仅依赖 `pip` 包。
+3. 在本地执行 `streamlit run app.py` 确认 UI、OCR、LLM 调用均可用，再推送到 GitHub。
 
 ### 2.2 部署步骤
 1. 登录 https://share.streamlit.io/ ，选择 **New app → From existing repo**，绑定 `WeFinance` 仓库与目标分支（通常 `main`）。

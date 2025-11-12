@@ -8,7 +8,9 @@ WeFinance Copilot is an AI-powered financial assistant for the 2025 Shenzhen Fin
 
 **Key Architecture Decision**: Originally used PaddleOCR, but migrated to GPT-4o Vision OCR for 100% recognition accuracy (vs 0% with synthetic images). This is the core competitive advantage.
 
-**Project Status**: Feature-complete for competition submission (deadline: 2025-11-16). Demo materials prepared (screenshots/, demo/wefinance_presentation.pptx).
+**Project Status**: Competition-ready deployment. Live demo at https://wefinance-copilot.streamlit.app. Demo materials prepared (screenshots/, demo/wefinance_presentation.pptx).
+
+**Deployment**: Primary deployment on Streamlit Community Cloud with automatic CI/CD from `main` branch. See DEPLOY.md for container deployment options.
 
 ## Essential Commands
 
@@ -72,6 +74,31 @@ ruff check --fix .  # Auto-fix safe issues
 python test_vision_ocr.py
 
 # Expected: 100% recognition rate on all 3 sample bills
+```
+
+### Deployment Commands
+
+#### Streamlit Community Cloud (Current Production)
+```bash
+# No manual deployment needed - auto-deploys from GitHub on push to main
+# Live URL: https://wefinance-copilot.streamlit.app
+
+# Local preview before push
+streamlit run app.py --server.port 8501
+
+# Check logs on Cloud Dashboard: https://share.streamlit.io/
+```
+
+#### Docker Deployment (Optional)
+```bash
+# Build Docker image (for private cloud deployment)
+docker build -t wefinance-copilot:latest .
+
+# Run container
+docker run -p 8501:8501 --env-file .env wefinance-copilot:latest
+
+# Deploy to K8s (ACK/TKE/EKS)
+kubectl apply -f k8s/deployment.yml
 ```
 
 ## Architecture Overview
@@ -317,6 +344,75 @@ def extract_transactions(image):
 - Logged at appropriate levels: `logger.error()`, `logger.warning()`, `logger.info()`
 - Never expose API keys, stack traces, or internal details to users
 
+## Deployment Architecture
+
+### Current Production: Streamlit Community Cloud
+
+**Live URL**: https://wefinance-copilot.streamlit.app
+
+**Deployment Flow**:
+```
+Local Development → Push to GitHub (main) → Auto-deploy to Streamlit Cloud → Live in 2-3 minutes
+```
+
+**Key Configuration**:
+- **Secrets Management**: Via Streamlit Cloud Dashboard (Settings → Secrets)
+- **Environment**: Python 3.10, automatically managed by Streamlit Cloud
+- **CI/CD**: Automatic on every push to `main` branch
+- **Logs**: Available in Streamlit Cloud Dashboard (Settings → Logs)
+
+**Streamlit Cloud Secrets** (configured in Dashboard, not committed to git):
+```toml
+# .streamlit/secrets.toml (template in repo as secrets.toml.example)
+OPENAI_API_KEY = "sk-your-api-key-here"
+OPENAI_BASE_URL = "https://newapi.deepwisdom.ai/v1"
+OPENAI_MODEL = "gpt-4o"
+LLM_PROVIDER = "openai"
+TZ = "Asia/Shanghai"
+```
+
+**Deployment Verification**:
+1. Push code to `main` branch
+2. Wait 2-3 minutes for auto-deployment
+3. Check Streamlit Cloud Dashboard for build status
+4. Test live app: Upload sample bill from `assets/sample_bills/`
+5. If errors, check Dashboard → Logs for stack traces
+
+### Alternative Deployment: Docker + K8s
+
+For private cloud deployment (internal networks, GPU nodes):
+
+**Docker Build**:
+```bash
+# Create Dockerfile (example)
+FROM python:3.10-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+EXPOSE 8501
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.headless=true"]
+```
+
+**Deploy to Kubernetes**:
+```bash
+# Build and push image
+docker build -t wefinance-copilot:latest .
+docker push your-registry/wefinance-copilot:latest
+
+# Deploy with K8s manifest (k8s/deployment.yml)
+kubectl apply -f k8s/deployment.yml
+kubectl scale deployment wefinance-copilot --replicas=3  # HPA for traffic
+```
+
+**Private Cloud Benefits**:
+- Data stays within company network (compliance)
+- GPU acceleration for future ML features
+- Custom resource allocation (8-core CPU + 32GB RAM + T4 GPU)
+- Nginx reverse proxy for internal access
+
+See DEPLOY.md for detailed deployment strategies.
+
 ## Configuration
 
 ### Required .env Variables
@@ -364,8 +460,11 @@ conda activate wefinance
 **Updating dependencies**:
 1. Modify `environment.yml` or `requirements.txt`
 2. Run `conda env update -f environment.yml --prune`
-3. Test all functionality
-4. Commit changes
+3. Test all functionality locally
+4. Commit changes to trigger Streamlit Cloud auto-redeploy
+5. Verify deployment on https://wefinance-copilot.streamlit.app
+
+**Important**: Streamlit Cloud reads `requirements.txt`, not `environment.yml`. Ensure dependencies are also listed in `requirements.txt` for cloud deployment.
 
 ## Common Pitfalls
 
@@ -728,9 +827,72 @@ WeFinance/
 └── test_vision_ocr.py         # Manual Vision OCR testing script
 ```
 
+## Git Workflow
+
+### Branch Strategy
+
+**Main Branch**: `main` (production-ready, auto-deploys to Streamlit Cloud)
+
+**Development Flow**:
+```bash
+# Create feature branch
+git checkout -b feature/your-feature-name
+
+# Make changes, test locally
+streamlit run app.py
+pytest tests/ -v
+
+# Format and lint
+black .
+ruff check --fix .
+
+# Commit with conventional commit format (NO emoji, NO Claude footer)
+git commit -m "feat(ocr): improve Vision OCR error handling"
+git commit -m "fix(chat): resolve cache invalidation on locale switch"
+git commit -m "docs: update deployment guide with K8s instructions"
+
+# Push and create PR
+git push origin feature/your-feature-name
+# Create PR on GitHub targeting main branch
+
+# After PR approval, merge to main
+# Streamlit Cloud auto-deploys within 2-3 minutes
+```
+
+**Commit Message Format** (see global CLAUDE.md):
+- ✅ Use conventional commits: `type(scope): description`
+- ✅ Types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `perf`
+- ❌ NO emoji in commit messages
+- ❌ NO "Generated with Claude Code" footer
+- ❌ NO "Co-Authored-By: Claude" footer
+
+**Pre-commit Checklist**:
+- [ ] All tests pass: `pytest tests/ -v`
+- [ ] Code formatted: `black .`
+- [ ] Linting clean: `ruff check .`
+- [ ] Local app runs: `streamlit run app.py`
+- [ ] No `.env` file committed (use `.env.example`)
+- [ ] API keys removed from code
+- [ ] Commit message follows conventional format
+
+### Deployment Status Check
+
+After merging to `main`:
+1. Visit https://share.streamlit.io/ (Streamlit Cloud Dashboard)
+2. Check deployment status (should show "Building..." → "Running")
+3. Wait 2-3 minutes for build completion
+4. Test live app at https://wefinance-copilot.streamlit.app
+5. If deployment fails, check logs in Dashboard → Logs
+6. Common failure causes:
+   - Missing dependencies in `requirements.txt`
+   - Secrets not configured in Streamlit Cloud
+   - Import errors (test locally first)
+
 ## For More Information
 
+- **Live Demo**: https://wefinance-copilot.streamlit.app
 - **Project Overview**: See README.md
+- **Deployment Guide**: See DEPLOY.md
 - **Collaboration Rules**: See `.claude/PROJECT_RULES.md`
 - **System Architecture**: See `.claude/specs/wefinance-copilot/02-system-architecture.md`
 - **Product Requirements**: See `.claude/specs/wefinance-copilot/01-product-requirements.md`

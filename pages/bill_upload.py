@@ -6,6 +6,7 @@ import csv
 import io
 import json
 from datetime import date
+from pathlib import Path
 from typing import Iterable, List
 
 import pandas as pd
@@ -13,9 +14,148 @@ import streamlit as st
 
 from models.entities import OCRParseResult, Transaction
 from modules.analysis import generate_insights
-from services.ocr_service import OCRService
+from services.ocr_service import MAX_FILE_SIZE_BYTES, OCRService
 from utils.error_handling import UserFacingError
 from utils.session import get_i18n, set_analysis_summary, set_transactions
+
+STRUCTURED_FILE_EXTENSIONS = {".csv", ".xlsx", ".xls"}
+MAX_FILE_SIZE_MB = MAX_FILE_SIZE_BYTES // (1024 * 1024)
+
+
+def _is_structured_file(filename: str) -> bool:
+    """判断是否为可直接导入的结构化文件（CSV或Excel）。"""
+
+    suffix = Path(filename or "").suffix.lower()
+    return suffix in STRUCTURED_FILE_EXTENSIONS
+
+
+def _parse_excel_file(file_bytes: bytes, i18n=None) -> List[Transaction]:
+    """Parse Excel file (.xlsx/.xls) into Transaction objects with smart column mapping."""
+    i18n = i18n or get_i18n()
+
+    # Column name mapping: Excel column → Transaction field
+    COLUMN_MAPPINGS = {
+        # Date fields
+        "date": "date",
+        "posting_date": "date",
+        "transaction_date": "date",
+        "clear_date": "date",
+        "document_create_date": "date",
+        # Merchant fields
+        "merchant": "merchant",
+        "name_customer": "merchant",
+        "customer_name": "merchant",
+        "vendor": "merchant",
+        "supplier": "merchant",
+        # Category field (less common, often needs manual input)
+        "category": "category",
+        "type": "category",
+        "transaction_type": "category",
+        # Amount fields
+        "amount": "amount",
+        "total_open_amount": "amount",
+        "total_amount": "amount",
+        "transaction_amount": "amount",
+        "value": "amount",
+        # Currency fields
+        "currency": "currency",
+        "invoice_currency": "currency",
+        "transaction_currency": "currency",
+    }
+
+    try:
+        # Read Excel file using pandas
+        df = pd.read_excel(io.BytesIO(file_bytes))
+
+        if df.empty:
+            raise ValueError(i18n.t("bill_upload.manual_error_no_rows"))
+
+        # Map column names (case-insensitive)
+        column_map = {}
+        mapped_targets = set()  # Track which target fields are already mapped
+
+        for col in df.columns:
+            col_lower = str(col).strip().lower()
+            if col_lower in COLUMN_MAPPINGS:
+                target_field = COLUMN_MAPPINGS[col_lower]
+                # Only map if this target field hasn't been mapped yet
+                if target_field not in mapped_targets:
+                    column_map[col] = target_field
+                    mapped_targets.add(target_field)
+
+        # Check if we have minimum required fields
+        mapped_fields = set(column_map.values())
+        if "date" not in mapped_fields:
+            raise ValueError(
+                f"缺少日期列。Excel文件必须包含以下列之一: posting_date, date, transaction_date, clear_date"
+            )
+        if "merchant" not in mapped_fields:
+            raise ValueError(
+                f"缺少商户列。Excel文件必须包含以下列之一: merchant, name_customer, customer_name, vendor"
+            )
+        if "amount" not in mapped_fields:
+            raise ValueError(
+                f"缺少金额列。Excel文件必须包含以下列之一: amount, total_open_amount, total_amount"
+            )
+
+        # Rename columns according to mapping
+        df_renamed = df.rename(columns=column_map)
+
+        transactions: List[Transaction] = []
+        for idx, row in df_renamed.iterrows():
+            # Skip rows with empty date
+            if pd.isna(row.get("date")) or not str(row.get("date", "")).strip():
+                continue
+
+            # Parse date field
+            date_val = row.get("date")
+            if isinstance(date_val, pd.Timestamp):
+                date_str = date_val.strftime("%Y-%m-%d")
+            elif hasattr(date_val, "isoformat"):
+                date_str = date_val.isoformat()
+            else:
+                date_str = str(date_val).strip()
+
+            # Skip if merchant is missing
+            merchant = str(row.get("merchant", "")).strip()
+            if not merchant:
+                continue
+
+            # Category is optional, use default if missing
+            category = str(row.get("category", "")).strip() or "其他"
+
+            try:
+                amount = float(row.get("amount", 0))
+            except (TypeError, ValueError):
+                continue
+
+            # Skip zero or negative amounts
+            if amount <= 0:
+                continue
+
+            transactions.append(
+                Transaction(
+                    id=str(row.get("id", "")).strip() or str(len(transactions) + 1),
+                    date=date_str,
+                    merchant=merchant,
+                    category=category,
+                    amount=amount,
+                    currency=str(row.get("currency", "CNY")).strip() or "CNY",
+                    payment_method=str(row.get("payment_method", "")).strip() or None,
+                )
+            )
+
+        if not transactions:
+            raise ValueError(
+                f"Excel文件中没有有效的交易记录。请确保数据行包含有效的日期、商户和金额。"
+            )
+
+        return transactions
+
+    except Exception as exc:
+        raise ValueError(
+            f"Excel文件解析失败: {str(exc)}"
+        ) from exc
 
 
 def _parse_manual_input(raw_text: str, i18n=None) -> List[Transaction]:
@@ -249,8 +389,8 @@ def render() -> None:
     st.write(i18n.t("bill_upload.subtitle"))
 
     uploaded_files = st.file_uploader(
-        i18n.t("bill_upload.uploader_help"),
-        type=["png", "jpg", "jpeg", "pdf"],
+        i18n.t("bill_upload.uploader_help", size=MAX_FILE_SIZE_MB),
+        type=["png", "jpg", "jpeg", "pdf", "csv", "xlsx", "xls"],
         accept_multiple_files=True,
     )
 
@@ -260,82 +400,185 @@ def render() -> None:
 
     ocr_service = OCRService()
     manual_mode = bool(st.session_state.get("show_manual_entry", False))
+    structured_results: list[OCRParseResult] = []
+    ocr_ready_files: list = []
     results: list[OCRParseResult | dict] = []
-    total_files = len(uploaded_files)
     total_transactions_detected = 0
 
-    try:
-        with st.status(
-            i18n.t("bill_upload.processing_status"), expanded=True
-        ) as status:
-            for idx, uploaded_file in enumerate(uploaded_files, 1):
-                filename = getattr(
-                    uploaded_file,
-                    "name",
-                    i18n.t("common.unnamed_file"),
+    for uploaded_file in uploaded_files:
+        filename = getattr(
+            uploaded_file,
+            "name",
+            i18n.t("common.unnamed_file"),
+        )
+        file_size = getattr(uploaded_file, "size", None)
+        if file_size and file_size > MAX_FILE_SIZE_BYTES:
+            st.error(
+                i18n.t(
+                    "bill_upload.file_too_large",
+                    filename=filename,
+                    size=MAX_FILE_SIZE_MB,
                 )
-                st.write(
-                    f"📄 "
-                    + i18n.t(
-                        "bill_upload.processing_file",
-                        current=idx,
-                        total=total_files,
+            )
+            manual_mode = True
+            st.session_state["show_manual_entry"] = True
+            continue
+
+        if _is_structured_file(filename):
+            try:
+                file_bytes = uploaded_file.read()
+                if len(file_bytes) > MAX_FILE_SIZE_BYTES:
+                    raise ValueError(
+                        i18n.t(
+                            "bill_upload.file_too_large",
+                            filename=filename,
+                            size=MAX_FILE_SIZE_MB,
+                        )
+                    )
+
+                # Try Excel first (handles misnamed .csv files that are actually Excel)
+                structured_transactions = None
+                file_text = ""
+                parse_error = None
+
+                try:
+                    # Try parsing as Excel
+                    structured_transactions = _parse_excel_file(file_bytes, i18n)
+                    file_text = f"Excel file: {filename}"
+                except Exception as excel_exc:
+                    # If Excel parsing fails, try CSV
+                    try:
+                        csv_text = file_bytes.decode("utf-8")
+                        structured_transactions = _parse_manual_input(csv_text, i18n)
+                        file_text = csv_text
+                    except Exception as csv_exc:
+                        # Both failed, report the error
+                        parse_error = (
+                            f"Excel error: {str(excel_exc)[:100]}; "
+                            f"CSV error: {str(csv_exc)[:100]}"
+                        )
+
+                if parse_error or not structured_transactions:
+                    raise ValueError(
+                        parse_error or i18n.t("bill_upload.manual_error_no_rows")
+                    )
+
+            except Exception as exc:  # pylint: disable=broad-except
+                st.error(
+                    i18n.t(
+                        "bill_upload.csv_import_error",
                         filename=filename,
+                        error=str(exc),
                     )
                 )
-                try:
-                    file_results = ocr_service.process_files([uploaded_file])
-                    results.extend(file_results)
-                    if file_results and file_results[0].transactions:
-                        txn_list = file_results[0].transactions
-                        total_transactions_detected += len(txn_list)
-                        st.success(
+                manual_mode = True
+                st.session_state["show_manual_entry"] = True
+            else:
+                structured_results.append(
+                    OCRParseResult(
+                        filename=filename,
+                        text=file_text,
+                        transactions=structured_transactions,
+                    )
+                )
+                total_transactions_detected += len(structured_transactions)
+                st.success(
+                    i18n.t(
+                        "bill_upload.csv_import_success",
+                        filename=filename,
+                        count=len(structured_transactions),
+                    )
+                )
+            continue
+
+        uploaded_file.seek(0)
+        ocr_ready_files.append(uploaded_file)
+
+    results.extend(structured_results)
+
+    if not ocr_ready_files and not structured_results:
+        st.warning(i18n.t("bill_upload.warning_no_txn"))
+        manual_mode = True
+        st.session_state["show_manual_entry"] = True
+        if manual_mode:
+            _render_manual_entry(i18n)
+        return
+
+    try:
+        if ocr_ready_files:
+            total_files = len(ocr_ready_files)
+            with st.status(
+                i18n.t("bill_upload.processing_status"), expanded=True
+            ) as status:
+                for idx, uploaded_file in enumerate(ocr_ready_files, 1):
+                    filename = getattr(
+                        uploaded_file,
+                        "name",
+                        i18n.t("common.unnamed_file"),
+                    )
+                    st.write(
+                        f"📄 "
+                        + i18n.t(
+                            "bill_upload.processing_file",
+                            current=idx,
+                            total=total_files,
+                            filename=filename,
+                        )
+                    )
+                    try:
+                        file_results = ocr_service.process_files([uploaded_file])
+                        results.extend(file_results)
+                        if file_results and file_results[0].transactions:
+                            txn_list = file_results[0].transactions
+                            total_transactions_detected += len(txn_list)
+                            st.success(
+                                i18n.t(
+                                    "bill_upload.recognized_count",
+                                    count=len(txn_list),
+                                )
+                            )
+                            for txn in txn_list[:3]:
+                                st.caption(
+                                    i18n.t(
+                                        "bill_upload.transaction_preview",
+                                        date=txn.date,
+                                        merchant=txn.merchant,
+                                        amount=f"{txn.amount:.2f}",
+                                    )
+                                )
+                            if len(txn_list) > 3:
+                                st.caption(
+                                    i18n.t(
+                                        "bill_upload.and_more",
+                                        count=len(txn_list) - 3,
+                                    )
+                                )
+                        else:
+                            st.warning(i18n.t("bill_upload.no_transactions_in_file"))
+                            manual_mode = True
+                            st.session_state["show_manual_entry"] = True
+                    except UserFacingError:
+                        raise
+                    except Exception as exc:  # pylint: disable=broad-except
+                        st.error(
                             i18n.t(
-                                "bill_upload.recognized_count",
-                                count=len(txn_list),
+                                "bill_upload.file_process_error",
+                                filename=filename,
+                                error=str(exc),
                             )
                         )
-                        for txn in txn_list[:3]:
-                            st.caption(
-                                i18n.t(
-                                    "bill_upload.transaction_preview",
-                                    date=txn.date,
-                                    merchant=txn.merchant,
-                                    amount=f"{txn.amount:.2f}",
-                                )
-                            )
-                        if len(txn_list) > 3:
-                            st.caption(
-                                i18n.t(
-                                    "bill_upload.and_more",
-                                    count=len(txn_list) - 3,
-                                )
-                            )
-                    else:
-                        st.warning(i18n.t("bill_upload.no_transactions_in_file"))
                         manual_mode = True
                         st.session_state["show_manual_entry"] = True
-                except UserFacingError:
-                    raise
-                except Exception as exc:  # pylint: disable=broad-except
-                    st.error(
-                        i18n.t(
-                            "bill_upload.file_process_error",
-                            filename=filename,
-                            error=str(exc),
-                        )
-                    )
-                    manual_mode = True
-                    st.session_state["show_manual_entry"] = True
-            status.update(
-                label=i18n.t(
-                    "bill_upload.all_files_processed",
-                    total=total_files,
-                    transactions=total_transactions_detected,
-                ),
-                state="complete",
-                expanded=False,
-            )
+                processed_total = len(structured_results) + total_files
+                status.update(
+                    label=i18n.t(
+                        "bill_upload.all_files_processed",
+                        total=processed_total,
+                        transactions=total_transactions_detected,
+                    ),
+                    state="complete",
+                    expanded=False,
+                )
     except UserFacingError as err:
         st.error(f"❌ {err.message}")
         if err.suggestion:

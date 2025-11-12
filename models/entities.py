@@ -8,6 +8,16 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
+class LineItem(BaseModel):
+    """Single line item in a receipt (商品明细)."""
+
+    description: str = Field(..., description="商品描述，如 'RF MODELLING CLAY'")
+    quantity: float = Field(default=1.0, description="数量")
+    unit_price: float = Field(..., description="单价")
+    amount: float = Field(..., description="小计金额")
+    discount: Optional[float] = Field(default=None, description="单项折扣金额")
+
+
 class Transaction(BaseModel):
     """Normalized transaction record parsed from OCR or CSV."""
 
@@ -24,6 +34,25 @@ class Transaction(BaseModel):
     )
     raw_text: Optional[str] = Field(
         default=None, description="Original OCR text snippet for explainability."
+    )
+
+    # === 扩展字段：支持真实收据的商品明细 ===
+    line_items: List[LineItem] = Field(
+        default_factory=list,
+        description="商品明细列表。简单账单为空，真实收据包含详细商品。",
+    )
+    subtotal: Optional[float] = Field(
+        default=None, description="小计金额（折扣前）"
+    )
+    total_discount: Optional[float] = Field(
+        default=None, description="总折扣金额"
+    )
+    tax: Optional[float] = Field(default=None, description="税费")
+    receipt_number: Optional[str] = Field(
+        default=None, description="收据编号，如 'TD01167104'"
+    )
+    receipt_time: Optional[dt.datetime] = Field(
+        default=None, description="交易精确时间（包含时分秒）"
     )
 
 
