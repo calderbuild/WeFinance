@@ -70,10 +70,17 @@ ruff check --fix .  # Auto-fix safe issues
 
 ### Vision OCR Testing
 ```bash
-# Test Vision OCR with sample bills (uses assets/sample_bills/*.png)
+# Simple test: Test Vision OCR with sample bills (uses assets/sample_bills/*.png)
 python test_vision_ocr.py
 
 # Expected: 100% recognition rate on all 3 sample bills
+
+# Advanced batch testing: Test all bills with metadata validation
+python scripts/test_vision_ocr.py --show-details --dump-json
+
+# This validates against expected_transactions in metadata.json
+# Results logged to: artifacts/ocr_test_results.log
+# JSON dumps saved to: artifacts/ocr_results/*.json
 
 # Test with real bill images (for production validation)
 # Real bills located in assets/sample_bills/real/ (1.jpg, 2.png, 3.png, 4.png)

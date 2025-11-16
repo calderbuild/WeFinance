@@ -89,7 +89,6 @@ echo.
 REM 检查关键包
 echo 📋 关键包验证：
 python -c "import streamlit; print(f'   ✅ streamlit {streamlit.__version__}')" 2>nul || echo    ❌ streamlit 安装失败
-python -c "import paddleocr; print('   ✅ paddleocr installed')" 2>nul || echo    ❌ paddleocr 安装失败
 python -c "import pandas; print(f'   ✅ pandas {pandas.__version__}')" 2>nul || echo    ❌ pandas 安装失败
 python -c "import openai; print(f'   ✅ openai {openai.__version__}')" 2>nul || echo    ❌ openai 安装失败
 python -c "import langchain; print(f'   ✅ langchain {langchain.__version__}')" 2>nul || echo    ❌ langchain 安装失败

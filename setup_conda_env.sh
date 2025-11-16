@@ -94,7 +94,6 @@ echo ""
 # 检查关键包
 echo "📋 关键包验证："
 python -c "import streamlit; print(f'   ✅ streamlit {streamlit.__version__}')" || echo "   ❌ streamlit 安装失败"
-python -c "import paddleocr; print('   ✅ paddleocr installed')" || echo "   ❌ paddleocr 安装失败"
 python -c "import pandas; print(f'   ✅ pandas {pandas.__version__}')" || echo "   ❌ pandas 安装失败"
 python -c "import openai; print(f'   ✅ openai {openai.__version__}')" || echo "   ❌ openai 安装失败"
 python -c "import langchain; print(f'   ✅ langchain {langchain.__version__}')" || echo "   ❌ langchain 安装失败"
