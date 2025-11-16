@@ -194,15 +194,13 @@ def render() -> None:
                 hole=0.4,
             )
             fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-            # 性能优化：简化配置，禁用不必要的交互
             fig_pie.update_layout(
                 showlegend=True,
                 margin=dict(t=40, b=0, l=0, r=0),
             )
             st.plotly_chart(
                 fig_pie,
-                **responsive_width_kwargs(st.plotly_chart),
-                config={'staticPlot': False, 'displayModeBar': False}  # 禁用工具栏加速渲染
+                **responsive_width_kwargs(st.plotly_chart)
             )
 
             bar_df = pie_df.sort_values("amount", ascending=False)
@@ -224,8 +222,7 @@ def render() -> None:
             )
             st.plotly_chart(
                 fig_bar,
-                **responsive_width_kwargs(st.plotly_chart),
-                config={'displayModeBar': False}  # 禁用工具栏
+                **responsive_width_kwargs(st.plotly_chart)
             )
 
     with st.expander(i18n.t("spending.trend_title"), expanded=False):
@@ -244,8 +241,7 @@ def render() -> None:
             fig_line.update_layout(margin=dict(t=40, b=40, l=40, r=0))
             st.plotly_chart(
                 fig_line,
-                **responsive_width_kwargs(st.plotly_chart),
-                config={'displayModeBar': False}
+                **responsive_width_kwargs(st.plotly_chart)
             )
         else:
             st.info(i18n.t("spending.trend_daily_empty"))
@@ -265,8 +261,7 @@ def render() -> None:
             fig_month.update_layout(margin=dict(t=40, b=40, l=40, r=0))
             st.plotly_chart(
                 fig_month,
-                **responsive_width_kwargs(st.plotly_chart),
-                config={'displayModeBar': False}
+                **responsive_width_kwargs(st.plotly_chart)
             )
 
     with st.expander(i18n.t("spending.insight_title"), expanded=True):

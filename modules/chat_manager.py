@@ -232,19 +232,29 @@ class ChatManager:
             self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         return self._client
 
-    def generate_response(self, user_prompt: str) -> str:
+    def generate_response(self, user_prompt: str, stream: bool = False) -> str:
         """
         Generate assistant response. Uses heuristics first, then falls back to GPT.
+
+        Args:
+            user_prompt: User's question
+            stream: If True, yields response chunks for streaming (generator mode)
         """
         heuristic_answer = self.query_transactions(user_prompt)
         if heuristic_answer:
             self.add_message("assistant", heuristic_answer)
-            return heuristic_answer
+            if stream:
+                yield heuristic_answer
+            else:
+                return heuristic_answer
 
         agent_answer = self._maybe_run_langchain_agent(user_prompt)
         if agent_answer:
             self.add_message("assistant", agent_answer)
-            return agent_answer
+            if stream:
+                yield agent_answer
+            else:
+                return agent_answer
 
         spent = self._current_month_spent()
         remaining = (
@@ -263,18 +273,41 @@ class ChatManager:
 
         client = self._ensure_client()
         errors: List[str] = []
+
         for attempt in range(3):
             try:
-                completion = client.chat.completions.create(
-                    model=self.model,
-                    temperature=0.2,
-                    messages=messages,
-                )
-                content = completion.choices[0].message.content
-                if not content:
-                    raise RuntimeError("empty_response")
-                self.add_message("assistant", content)
-                return content
+                if stream:
+                    # 流式模式：逐步返回
+                    full_response = ""
+                    completion_stream = client.chat.completions.create(
+                        model=self.model,
+                        temperature=0.2,
+                        messages=messages,
+                        stream=True,
+                    )
+                    for chunk in completion_stream:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            content_chunk = chunk.choices[0].delta.content
+                            full_response += content_chunk
+                            yield content_chunk
+
+                    if not full_response:
+                        raise RuntimeError("empty_response")
+                    self.add_message("assistant", full_response)
+                    return  # Generator完成
+                else:
+                    # 非流式模式：一次性返回
+                    completion = client.chat.completions.create(
+                        model=self.model,
+                        temperature=0.2,
+                        messages=messages,
+                    )
+                    content = completion.choices[0].message.content
+                    if not content:
+                        raise RuntimeError("empty_response")
+                    self.add_message("assistant", content)
+                    return content
+
             except (OpenAIError, RuntimeError) as exc:
                 errors.append(str(exc))
                 logger.warning("LLM调用失败（第%s次）: %s", attempt + 1, exc)

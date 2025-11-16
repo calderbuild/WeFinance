@@ -134,14 +134,24 @@ def render() -> None:
         return
 
     with st.chat_message("assistant"):
-        with st.spinner(i18n.t("common.loading_thinking")):
-            response = chat_manager.generate_response(user_prompt)
-            cache[cache_key] = response
-            if len(cache) > 20:
-                first_key = next(iter(cache))
-                cache.pop(first_key, None)
-            st.write(response)
-    history.append({"role": "assistant", "content": response})
+        # 使用流式输出，实时显示回复
+        response_placeholder = st.empty()
+        full_response = ""
+
+        for chunk in chat_manager.generate_response(user_prompt, stream=True):
+            full_response += chunk
+            response_placeholder.markdown(full_response + "▌")  # 添加闪烁光标效果
+
+        # 显示最终结果
+        response_placeholder.markdown(full_response)
+
+        # 缓存完整回复
+        cache[cache_key] = full_response
+        if len(cache) > 20:
+            first_key = next(iter(cache))
+            cache.pop(first_key, None)
+
+    history.append({"role": "assistant", "content": full_response})
     set_chat_history(history)
 
 
