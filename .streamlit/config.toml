@@ -1,5 +1,6 @@
 # Streamlit Community Cloud 配置文件
 # 适用于 WeFinance Copilot 项目
+# Design System: Modern Finance Luxury
 
 [server]
 headless = true
@@ -11,8 +12,13 @@ enableXsrfProtection = false
 gatherUsageStats = false
 
 [theme]
-primaryColor = "#1f77b4"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f0f2f6"
-textColor = "#262730"
+# Primary: Deep Teal - 信任、增长、财富
+primaryColor = "#0d9488"
+
+# Dark theme for professional finance aesthetic
+backgroundColor = "#0f172a"
+secondaryBackgroundColor = "#1e293b"
+textColor = "#f8fafc"
+
+# Custom font stack with DM Sans
 font = "sans serif"

@@ -21,6 +21,7 @@ from utils.session import (
 )
 from utils.storage import clear_all_storage, load_from_storage
 from utils.ui_components import responsive_width_kwargs
+from utils.design_system import inject_global_styles, render_hero_banner, COLORS, FONTS, SPACING, RADIUS
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,9 @@ st.set_page_config(
     },
 )
 
+# Inject global design system styles
+inject_global_styles()
+
 
 @st.cache_data
 def get_comparison_table(locale: str):
@@ -114,24 +118,93 @@ def get_comparison_table(locale: str):
 def _render_home() -> None:
     """Render the landing page with value proposition and card-based navigation."""
     i18n = get_i18n()
+    is_zh = i18n.locale == "zh_CN"
 
-    # Purple gradient value proposition banner
+    # Modern Finance Luxury hero banner with glassmorphism
     st.markdown(
         f"""
-        <div style="
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 2rem;
-            border-radius: 12px;
-            color: white;
-            margin-bottom: 2rem;
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-        ">
-            <h1 style="margin: 0; font-size: 2rem; font-weight: 700;">
-                {i18n.t("app.value_banner_title")}
-            </h1>
-            <p style="margin: 0.5rem 0 0 0; font-size: 1.1rem; opacity: 0.95;">
-                {i18n.t("app.value_banner_subtitle")}
-            </p>
+        <div class="wf-hero" style="margin-bottom: {SPACING['xl']};">
+            <div style="position: relative; z-index: 1;">
+                <div style="
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 0.5rem;
+                    background: {COLORS['accent_muted']};
+                    padding: 0.375rem 0.75rem;
+                    border-radius: 9999px;
+                    font-size: {FONTS['size_xs']};
+                    color: {COLORS['accent']};
+                    font-weight: 600;
+                    letter-spacing: 0.05em;
+                    margin-bottom: {SPACING['md']};
+                ">
+                    <span style="
+                        width: 6px;
+                        height: 6px;
+                        background: {COLORS['accent']};
+                        border-radius: 50%;
+                        animation: wf-pulse-glow 2s ease-in-out infinite;
+                    "></span>
+                    {'AI驱动' if is_zh else 'AI-Powered'}
+                </div>
+                <h1 style="
+                    font-family: {FONTS['heading']};
+                    font-size: {FONTS['size_4xl']};
+                    font-weight: 400;
+                    color: {COLORS['text_primary']};
+                    margin: 0 0 {SPACING['sm']} 0;
+                    letter-spacing: -0.02em;
+                    line-height: 1.2;
+                ">
+                    {i18n.t("app.value_banner_title")}
+                </h1>
+                <p style="
+                    font-size: {FONTS['size_lg']};
+                    color: {COLORS['text_secondary']};
+                    margin: 0;
+                    max-width: 600px;
+                    line-height: 1.6;
+                ">
+                    {i18n.t("app.value_banner_subtitle")}
+                </p>
+                <div style="
+                    display: flex;
+                    gap: {SPACING['md']};
+                    margin-top: {SPACING['lg']};
+                    flex-wrap: wrap;
+                ">
+                    <div style="
+                        display: flex;
+                        align-items: center;
+                        gap: 0.5rem;
+                        font-size: {FONTS['size_sm']};
+                        color: {COLORS['text_secondary']};
+                    ">
+                        <span style="color: {COLORS['success']};">●</span>
+                        {'100% OCR准确率' if is_zh else '100% OCR Accuracy'}
+                    </div>
+                    <div style="
+                        display: flex;
+                        align-items: center;
+                        gap: 0.5rem;
+                        font-size: {FONTS['size_sm']};
+                        color: {COLORS['text_secondary']};
+                    ">
+                        <span style="color: {COLORS['primary']};">●</span>
+                        {'智能异常检测' if is_zh else 'Smart Anomaly Detection'}
+                    </div>
+                    <div style="
+                        display: flex;
+                        align-items: center;
+                        gap: 0.5rem;
+                        font-size: {FONTS['size_sm']};
+                        color: {COLORS['text_secondary']};
+                    ">
+                        <span style="color: {COLORS['accent']};">●</span>
+                        {'可解释AI建议' if is_zh else 'Explainable AI Advice'}
+                    </div>
+                </div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True
@@ -193,15 +266,30 @@ def _render_home() -> None:
 
     total_spent = sum(txn.amount for txn in transactions)
     budget_remaining = monthly_budget - total_spent
+    usage_rate = (total_spent / monthly_budget * 100) if monthly_budget > 0 else 0
 
-    # 3-column metrics cards with direct navigation buttons
+    # 3-column metrics cards with new design
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.metric(
-            label=i18n.t("app.metric_transactions"),
-            value=i18n.t("app.metric_transactions_unit", count=len(transactions))
-        )
+        st.markdown(f"""
+        <div class="wf-metric-card">
+            <div style="
+                font-size: {FONTS['size_xs']};
+                color: {COLORS['text_muted']};
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                margin-bottom: {SPACING['xs']};
+            ">{'已记录交易' if is_zh else 'Transactions'}</div>
+            <div style="
+                font-family: {FONTS['mono']};
+                font-size: {FONTS['size_3xl']};
+                font-weight: 600;
+                color: {COLORS['text_primary']};
+                margin-bottom: {SPACING['sm']};
+            ">{len(transactions)}<span style="font-size: {FONTS['size_lg']}; color: {COLORS['text_secondary']}; margin-left: 0.25rem;">{'笔' if is_zh else ''}</span></div>
+        </div>
+        """, unsafe_allow_html=True)
         if st.button(
             i18n.t("app.btn_upload_bills"),
             key="home_upload_btn",
@@ -212,11 +300,29 @@ def _render_home() -> None:
             st.rerun()
 
     with col2:
-        st.metric(
-            label=i18n.t("app.metric_budget_remaining"),
-            value=f"¥{budget_remaining:,.0f}",
-            delta=i18n.t("app.metric_budget_spent", spent=total_spent)
-        )
+        remaining_color = COLORS['success'] if budget_remaining >= 0 else COLORS['error']
+        st.markdown(f"""
+        <div class="wf-metric-card">
+            <div style="
+                font-size: {FONTS['size_xs']};
+                color: {COLORS['text_muted']};
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                margin-bottom: {SPACING['xs']};
+            ">{'预算剩余' if is_zh else 'Budget Remaining'}</div>
+            <div style="
+                font-family: {FONTS['mono']};
+                font-size: {FONTS['size_3xl']};
+                font-weight: 600;
+                color: {remaining_color};
+                margin-bottom: {SPACING['xs']};
+            ">¥{budget_remaining:,.0f}</div>
+            <div style="
+                font-size: {FONTS['size_sm']};
+                color: {COLORS['text_secondary']};
+            ">{'已支出' if is_zh else 'Spent'}: ¥{total_spent:,.0f} ({usage_rate:.0f}%)</div>
+        </div>
+        """, unsafe_allow_html=True)
         if st.button(
             i18n.t("app.btn_view_analysis"),
             key="home_analysis_btn",
@@ -226,10 +332,24 @@ def _render_home() -> None:
             st.rerun()
 
     with col3:
-        st.metric(
-            label=i18n.t("app.metric_chat_history"),
-            value=i18n.t("app.metric_chat_unit", count=len(chat_history))
-        )
+        st.markdown(f"""
+        <div class="wf-metric-card">
+            <div style="
+                font-size: {FONTS['size_xs']};
+                color: {COLORS['text_muted']};
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                margin-bottom: {SPACING['xs']};
+            ">{'AI对话' if is_zh else 'AI Chats'}</div>
+            <div style="
+                font-family: {FONTS['mono']};
+                font-size: {FONTS['size_3xl']};
+                font-weight: 600;
+                color: {COLORS['primary']};
+                margin-bottom: {SPACING['sm']};
+            ">{len(chat_history)}<span style="font-size: {FONTS['size_lg']}; color: {COLORS['text_secondary']}; margin-left: 0.25rem;">{'次' if is_zh else ''}</span></div>
+        </div>
+        """, unsafe_allow_html=True)
         if st.button(
             i18n.t("app.btn_start_chat"),
             key="home_chat_btn",
@@ -311,7 +431,42 @@ def main() -> None:
     i18n = get_i18n()
 
     with st.sidebar:
-        st.header("WeFinance Copilot")
+        # Sidebar header with brand styling
+        st.markdown(f"""
+        <div style="
+            padding: {SPACING['md']} 0;
+            border-bottom: 1px solid {COLORS['border']};
+            margin-bottom: {SPACING['md']};
+        ">
+            <h2 style="
+                font-family: {FONTS['heading']};
+                font-size: {FONTS['size_xl']};
+                color: {COLORS['text_primary']};
+                margin: 0;
+                display: flex;
+                align-items: center;
+                gap: {SPACING['sm']};
+            ">
+                <span style="
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: 32px;
+                    height: 32px;
+                    background: {COLORS['gradient_primary']};
+                    border-radius: {RADIUS['md']};
+                    font-size: 1rem;
+                ">💰</span>
+                WeFinance
+            </h2>
+            <p style="
+                font-size: {FONTS['size_xs']};
+                color: {COLORS['text_muted']};
+                margin: {SPACING['xs']} 0 0 0;
+                letter-spacing: 0.05em;
+            ">AI-Powered Financial Copilot</p>
+        </div>
+        """, unsafe_allow_html=True)
 
         # 语言切换（紧凑）
         locale_labels = {"zh_CN": "中文", "en_US": "English"}
