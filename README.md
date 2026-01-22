@@ -238,7 +238,7 @@ python scripts/test_vision_ocr.py --show-details --dump-json
 
 ```bash
 # Clone repository
-git clone https://github.com/JasonRobertDestiny/WeFinance.git
+git clone https://github.com/calderbuild/WeFinance.git
 cd WeFinance
 
 # Create conda environment (recommended)
@@ -414,9 +414,9 @@ High-impact contributions:
 
 ## Community & Support
 
-- **Issues**: [GitHub Issues](https://github.com/JasonRobertDestiny/WeFinance/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/JasonRobertDestiny/WeFinance/discussions)
-- **Email**: johnrobertdestiny@gmail.com
+- **Issues**: [GitHub Issues](https://github.com/calderbuild/WeFinance/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/calderbuild/WeFinance/discussions)
+- **Email**: calderbuilder@gmail.com
 
 ### Join Our WeChat Community
 
@@ -453,4 +453,4 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) for deta
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=JasonRobertDestiny/WeFinance&type=Date)](https://star-history.com/#JasonRobertDestiny/WeFinance&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=calderbuild/WeFinance&type=Date)](https://star-history.com/#calderbuild/WeFinance&Date)

@@ -238,7 +238,7 @@ python scripts/test_vision_ocr.py --show-details --dump-json
 
 ```bash
 # 克隆仓库
-git clone https://github.com/JasonRobertDestiny/WeFinance.git
+git clone https://github.com/calderbuild/WeFinance.git
 cd WeFinance
 
 # 创建conda环境（推荐）
@@ -414,9 +414,9 @@ python scripts/test_vision_ocr.py --show-details --dump-json
 
 ## 社区与支持
 
-- **问题反馈**：[GitHub Issues](https://github.com/JasonRobertDestiny/WeFinance/issues)
-- **讨论交流**：[GitHub Discussions](https://github.com/JasonRobertDestiny/WeFinance/discussions)
-- **邮箱**：johnrobertdestiny@gmail.com
+- **问题反馈**：[GitHub Issues](https://github.com/calderbuild/WeFinance/issues)
+- **讨论交流**：[GitHub Discussions](https://github.com/calderbuild/WeFinance/discussions)
+- **邮箱**：calderbuilder@gmail.com
 
 ### 加入微信交流群
 
@@ -453,4 +453,4 @@ python scripts/test_vision_ocr.py --show-details --dump-json
 
 ## Star历史
 
-[![Star History Chart](https://api.star-history.com/svg?repos=JasonRobertDestiny/WeFinance&type=Date)](https://star-history.com/#JasonRobertDestiny/WeFinance&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=calderbuild/WeFinance&type=Date)](https://star-history.com/#calderbuild/WeFinance&Date)
