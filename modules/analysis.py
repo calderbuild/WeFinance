@@ -213,6 +213,175 @@ def calculate_spending_trend(
     return resampled
 
 
+@safe_call(timeout=30, fallback=None, error_message="预测解释生成失败")
+def _generate_forecast_narrative_llm(
+    decision_log: Dict[str, object],
+    locale: str = "zh_CN",
+) -> str | None:
+    """
+    Convert the rule-engine forecast decision log into a natural-language
+    explanation, mirroring the hybrid rule-engine + LLM pattern used by
+    _generate_personalized_actions_llm above: the rule engine computes the
+    numbers, the LLM only explains them (it is not allowed to invent numbers).
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        logger.warning("OPENAI_API_KEY未配置，跳过预测解释生成")
+        return None
+
+    client = OpenAI(api_key=api_key, base_url=os.getenv("OPENAI_BASE_URL"))
+
+    risk_flag = str(decision_log.get("risk_flag", "flat"))
+    slope_ratio_pct = float(decision_log.get("slope_ratio", 0.0) or 0.0) * 100
+    r_squared = float(decision_log.get("r_squared", 0.0) or 0.0)
+    volatility = float(decision_log.get("volatility", 0.0) or 0.0)
+    periods_ahead = int(decision_log.get("periods_ahead", 3) or 3)
+    first_forecast = float(decision_log.get("first_forecast", 0.0) or 0.0)
+    last_actual = float(decision_log.get("last_actual", 0.0) or 0.0)
+    history_points = int(decision_log.get("history_points", 0) or 0)
+
+    if locale == "en_US":
+        prompt = f"""You are a financial analyst explaining a spending forecast to a small-business owner or freelancer with no finance background.
+
+Forecast facts (already computed by a rule engine -- do not invent new numbers, only explain these):
+- Method: linear trend extrapolation over {history_points} historical periods
+- Trend direction: {risk_flag} ({slope_ratio_pct:.1f}% change per period relative to average spending)
+- Fit quality (R-squared): {r_squared:.2f} (closer to 1.0 = more reliable trend)
+- Historical volatility (residual std dev): {volatility:.0f}
+- Last actual period spending: {last_actual:.0f}
+- Next period forecast: {first_forecast:.0f}
+- Forecasting {periods_ahead} period(s) ahead
+
+Write a 2-3 sentence explanation using a "Because... therefore..." causal structure, plain language, no jargon. If R-squared is below 0.3, explicitly say the trend is not very reliable. End with one concrete, actionable suggestion. Frame the forecast as a projection based on historical trend only, never as a guaranteed outcome."""
+    else:
+        prompt = f"""你是一名财务分析师，正在向没有专业财务背景的个体户/自由职业者解释一份支出预测。
+
+预测事实（已由规则引擎计算好，不要编造新数字，只负责解释）：
+- 方法：基于最近 {history_points} 期历史数据的线性趋势外推
+- 趋势方向：{risk_flag}（相对历史均值每期变化 {slope_ratio_pct:.1f}%）
+- 拟合优度（R²）：{r_squared:.2f}（越接近1趋势越可信）
+- 历史波动（残差标准差）：{volatility:.0f}
+- 最近一期实际支出：{last_actual:.0f}
+- 下一期预测支出：{first_forecast:.0f}
+- 本次预测未来 {periods_ahead} 期
+
+用"因为…所以…"的因果句式写2-3句解释，语言通俗、不要术语堆砌。如果R²低于0.3，要明确指出这个趋势不太可靠。结尾给一条具体可执行的建议。把预测表述为基于历史趋势的推算，不要说成一定会发生的结果。"""
+
+    try:
+        response = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            temperature=0.3,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a financial analyst who explains forecasts transparently and never overstates certainty."
+                        if locale == "en_US"
+                        else "你是财务分析师，解释预测时保持透明，不夸大确定性。"
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+        )
+        content = response.choices[0].message.content
+        if not content:
+            return None
+        return content.strip()
+    except Exception as e:  # noqa: BLE001 - mirrors existing LLM helper's catch-all
+        logger.warning(f"预测解释生成异常: {e}")
+        return None
+
+
+def forecast_spending_trend(
+    transactions: Iterable[Transaction],
+    frequency: str = "M",
+    periods_ahead: int = 3,
+    locale: str = "zh_CN",
+) -> Dict[str, object]:
+    """
+    Forecast future spending by linearly extrapolating the same aggregated
+    trend used by calculate_spending_trend.
+
+    WeFinance currently only ingests outflow transactions (bills/receipts),
+    with no income data source, so this is a spending forecast rather than a
+    full income-minus-expense cash-flow forecast -- callers/UI copy should
+    say "支出预测/spending forecast", not claim net cash flow.
+
+    Returns a dict with:
+    - history: DataFrame ['period', 'amount'] actual aggregated spending
+    - forecast: DataFrame ['period', 'amount'] projected future spending
+    - decision_log: dict of the rule engine's reasoning (auditable, no LLM
+      involved in computing these numbers)
+    - narrative: Optional[str] LLM explanation of decision_log, or None if
+      unavailable (caller should render a decision_log-based fallback line)
+    - insufficient_data: bool
+    """
+    history = calculate_spending_trend(transactions, frequency=frequency)
+    min_points = 3
+    if len(history) < min_points:
+        return {
+            "history": history,
+            "forecast": pd.DataFrame(columns=["period", "amount"]),
+            "decision_log": {
+                "insufficient_data": True,
+                "history_points": len(history),
+                "min_points_required": min_points,
+            },
+            "narrative": None,
+            "insufficient_data": True,
+        }
+
+    x = np.arange(len(history))
+    y = history["amount"].to_numpy(dtype=float)
+    slope, intercept = np.polyfit(x, y, 1)
+    predicted_hist = slope * x + intercept
+    residuals = y - predicted_hist
+    volatility = float(np.std(residuals, ddof=0))
+    y_mean = float(np.mean(y))
+    ss_tot = float(np.sum((y - y_mean) ** 2))
+    ss_res = float(np.sum(residuals**2))
+    r_squared = float(1 - ss_res / ss_tot) if ss_tot > 0 else 0.0
+
+    future_x = np.arange(len(history), len(history) + periods_ahead)
+    future_y = np.clip(slope * future_x + intercept, a_min=0.0, a_max=None)
+    future_periods = pd.date_range(
+        start=history["period"].iloc[-1], periods=periods_ahead + 1, freq=frequency
+    )[1:]
+    forecast_df = pd.DataFrame({"period": future_periods, "amount": future_y})
+
+    slope_ratio = float(slope / y_mean) if y_mean else 0.0
+    if slope_ratio > 0.05:
+        risk_flag = "up"
+    elif slope_ratio < -0.05:
+        risk_flag = "down"
+    else:
+        risk_flag = "flat"
+
+    decision_log: Dict[str, object] = {
+        "insufficient_data": False,
+        "method": "linear_trend_extrapolation",
+        "history_points": len(history),
+        "periods_ahead": periods_ahead,
+        "slope_per_period": float(slope),
+        "slope_ratio": slope_ratio,
+        "r_squared": r_squared,
+        "volatility": volatility,
+        "risk_flag": risk_flag,
+        "last_actual": float(y[-1]),
+        "first_forecast": float(future_y[0]) if len(future_y) else 0.0,
+    }
+
+    narrative = _generate_forecast_narrative_llm(decision_log, locale=locale)
+
+    return {
+        "history": history,
+        "forecast": forecast_df,
+        "decision_log": decision_log,
+        "narrative": narrative,
+        "insufficient_data": False,
+    }
+
+
 def _compute_zscore_anomalies(
     transactions: Sequence[Transaction],
     threshold: float,

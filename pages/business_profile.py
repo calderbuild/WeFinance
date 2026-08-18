@@ -10,6 +10,7 @@ from modules.analysis import (
     calculate_merchant_totals,
     calculate_spending_trend,
     compute_anomaly_report,
+    forecast_spending_trend,
 )
 from utils import session as session_utils
 from utils.ui_components import responsive_width_kwargs
@@ -50,6 +51,59 @@ def render() -> None:
             st.plotly_chart(fig, **responsive_width_kwargs(st.plotly_chart))
         else:
             st.info(i18n.t("business_profile.trend_empty"))
+
+    with st.expander(i18n.t("business_profile.forecast_title"), expanded=True):
+        locale_code = getattr(i18n, "locale", "zh_CN")
+        forecast_result = forecast_spending_trend(
+            transactions, frequency="M", periods_ahead=3, locale=locale_code
+        )
+        if forecast_result["insufficient_data"]:
+            st.info(i18n.t("business_profile.forecast_empty"))
+        else:
+            history = forecast_result["history"].copy()
+            history["series"] = i18n.t("business_profile.forecast_label_history")
+            forecast_df = forecast_result["forecast"].copy()
+            forecast_df["series"] = i18n.t("business_profile.forecast_label_forecast")
+            combined = pd.concat([history, forecast_df], ignore_index=True)
+            fig = px.line(
+                combined,
+                x="period",
+                y="amount",
+                color="series",
+                markers=True,
+                line_dash="series",
+                title=i18n.t("business_profile.forecast_title"),
+                labels={
+                    "period": i18n.t("spending.label_month"),
+                    "amount": i18n.t("spending.label_amount"),
+                    "series": "",
+                },
+            )
+            fig.update_layout(margin=dict(t=40, b=40, l=40, r=0))
+            st.plotly_chart(fig, **responsive_width_kwargs(st.plotly_chart))
+
+            decision_log = forecast_result["decision_log"]
+            narrative = forecast_result["narrative"]
+            if narrative:
+                st.write(narrative)
+            else:
+                risk_key = {
+                    "up": "business_profile.forecast_risk_up",
+                    "down": "business_profile.forecast_risk_down",
+                    "flat": "business_profile.forecast_risk_flat",
+                }.get(
+                    str(decision_log.get("risk_flag", "flat")),
+                    "business_profile.forecast_risk_flat",
+                )
+                st.write(
+                    i18n.t(
+                        "business_profile.forecast_narrative_fallback",
+                        risk_word=i18n.t(risk_key),
+                        first_forecast=f"{float(decision_log.get('first_forecast', 0.0) or 0.0):,.0f}",
+                        r_squared=f"{float(decision_log.get('r_squared', 0.0) or 0.0):.2f}",
+                    )
+                )
+            st.caption(i18n.t("business_profile.forecast_disclaimer"))
 
     with st.expander(i18n.t("business_profile.concentration_title"), expanded=True):
         if merchant_totals:
