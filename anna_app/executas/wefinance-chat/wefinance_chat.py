@@ -27,7 +27,7 @@ import uuid
 MANIFEST = {
     "name": "wefinance-chat",
     "display_name": "WeFinance Advisor Chat",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "description": "Ask financial questions about your spending and get advice grounded in your actual transactions.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample"],
@@ -195,7 +195,20 @@ def sample(invoke_id: str, prompt: str, *, max_tokens: int = 2000) -> str:
     resp = q.get(timeout=50)
     if "error" in resp:
         raise RuntimeError(_friendly_sampling_error(resp["error"]))
-    return resp["result"]["content"]["text"]
+    result = resp["result"]
+    text = result["content"]["text"]
+    if not text:
+        # executa-sampling.md's documented result shape carries stopReason /
+        # usage / _meta.provider alongside content.text -- surface them
+        # instead of silently returning "" so an empty completion shows up
+        # as a diagnosable tool error, not a blank answer the UI shrugs off.
+        raise RuntimeError(
+            "Model returned an empty completion "
+            f"(stopReason={result.get('stopReason')!r}, "
+            f"usage={result.get('usage')!r}, "
+            f"provider={(result.get('_meta') or {}).get('provider')!r})"
+        )
+    return text
 
 
 # --- Tool logic --------------------------------------------------------------
