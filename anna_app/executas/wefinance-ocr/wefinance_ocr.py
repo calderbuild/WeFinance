@@ -64,7 +64,7 @@ from datetime import date, datetime
 MANIFEST = {
     "name": "wefinance-ocr",
     "display_name": "WeFinance Bill Scanner",
-    "version": "0.1.3",
+    "version": "0.1.4",
     "description": "Extract structured transactions from a photo of a bill, receipt, or payment screenshot.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample", "llm.agent.auto"],
@@ -480,7 +480,17 @@ def run_session(
     final_text = ""
     for frame in result.get("frames", []):
         ev = frame.get("event")
-        if ev in ("delta", "token", "message"):
+        if ev == "sse":
+            # Real host shape (not documented in executa-lifecycle.md's worked
+            # example): each 'sse' frame wraps an OpenAI-style streaming chat
+            # completion delta -- content text lives at
+            # choices[0].delta.content, alongside control-only deltas like
+            # task_info/processing_started/task_complete that carry no text.
+            for choice in frame.get("choices") or []:
+                content = (choice.get("delta") or {}).get("content")
+                if isinstance(content, str) and content:
+                    deltas.append(content)
+        elif ev in ("delta", "token", "message"):
             txt = frame.get("text") or ""
             if txt:
                 deltas.append(txt)

@@ -1,6 +1,6 @@
 [project]
 name = "wefinance-ocr"
-version = "0.1.3"
+version = "0.1.4"
 description = "Extract structured transactions from a photo of a bill, receipt, or payment screenshot."
 requires-python = ">=3.10"
 dependencies = []

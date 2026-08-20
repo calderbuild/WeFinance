@@ -1,7 +1,7 @@
 {
   "slug": "wefinance-ocr",
   "name": "WeFinance Bill Scanner",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "executa_type": "tool",
   "description": "Extract structured transactions from a photo of a bill, receipt, or payment screenshot.",
   "tool_id": "tool-calderbuild-wefinance-bill-scanner-swymwa2w",
