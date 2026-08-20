@@ -5,5 +5,12 @@
   "executa_type": "tool",
   "description": "Extract structured transactions from a photo of a bill, receipt, or payment screenshot.",
   "tool_id": "tool-calderbuild-wefinance-bill-scanner-swymwa2w",
-  "type": "python"
+  "type": "python",
+  "distribution": {
+    "type": "binary",
+    "binary_artifacts": {
+      "darwin-arm64": { "path": "dist/wefinance-ocr-darwin-arm64.tar.gz", "entrypoint": "wefinance-ocr" },
+      "linux-x86_64": { "path": "dist/wefinance-ocr-linux-x86_64.tar.gz", "entrypoint": "wefinance-ocr" }
+    }
+  }
 }
