@@ -1,9 +1,16 @@
 {
   "slug": "wefinance-chat",
   "name": "WeFinance Advisor Chat",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "executa_type": "tool",
   "description": "Answer financial questions grounded in the user's actual transactions.",
   "tool_id": "tool-calderbuild-wefinance-advisor-chat-zm45qs9z",
-  "type": "python"
+  "type": "python",
+  "distribution": {
+    "type": "binary",
+    "binary_artifacts": {
+      "darwin-arm64": { "path": "dist/wefinance-chat-darwin-arm64.tar.gz", "entrypoint": "wefinance-chat" },
+      "linux-x86_64": { "path": "dist/wefinance-chat-linux-x86_64.tar.gz", "entrypoint": "wefinance-chat" }
+    }
+  }
 }

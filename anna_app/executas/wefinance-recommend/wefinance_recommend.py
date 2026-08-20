@@ -23,7 +23,7 @@ from collections import defaultdict
 MANIFEST = {
     "name": "wefinance-recommend",
     "display_name": "WeFinance Investment Recommendations",
-    "version": "0.1.3",
+    "version": "0.1.4",
     "description": "Generate explainable investment recommendations grounded in the user's real spending data.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample"],
@@ -363,7 +363,7 @@ RETRY_REPAIR_SUFFIX = (
 )
 
 
-def sample_structured(invoke_id: str, prompt: str, *, max_tokens: int = 800) -> dict:
+def sample_structured(invoke_id: str, prompt: str, *, max_tokens: int = 3000) -> dict:
     data, downgraded_missing = _request_structured_completion(
         invoke_id, prompt, max_tokens
     )
