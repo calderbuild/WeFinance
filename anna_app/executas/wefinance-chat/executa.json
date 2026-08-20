@@ -1,7 +1,7 @@
 {
   "slug": "wefinance-chat",
   "name": "WeFinance Advisor Chat",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "executa_type": "tool",
   "description": "Answer financial questions grounded in the user's actual transactions.",
   "tool_id": "tool-calderbuild-wefinance-advisor-chat-zm45qs9z",
