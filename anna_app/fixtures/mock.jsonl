@@ -1,0 +1,5 @@
+{"ns":"agent","method":"session.create","result":{"app_session_uuid":"dev-mock-session"}}
+{"ns":"agent","method":"session.run","result":{"run_id":"dev-mock-run","stream_id":"dev-mock-stream","frames":[{"event":"final","text":"{\"transaction_count\":1,\"transactions\":[{\"date\":\"2026-08-20\",\"merchant\":\"Mock Cafe\",\"category\":\"Dining\",\"amount\":12.5,\"currency\":\"USD\"}]}"}],"final":true}}
+{"ns":"agent","method":"session.delete","result":{"status":"deleted"}}
+{"ns":"llm","method":"complete","result":{"role":"assistant","content":{"type":"text","text":"Mock advisor answer."},"model":"mock","stopReason":"endTurn"}}
+{"ns":"llm","method":"complete","match":{"contentIncludes":"recommendations"},"result":{"role":"assistant","content":{"type":"text","text":"{\"recommendations\":[{\"title\":\"Mock rec\",\"summary\":\"Mock summary\",\"rationale_steps\":[\"step one\"],\"risk_level\":\"Balanced\"}]}"}}}

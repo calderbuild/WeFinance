@@ -1,0 +1,194 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --border: #2a2f3a;
+  --text: #e6e8ec;
+  --text-dim: #9aa1ad;
+  --accent: #4fd1a5;
+  --accent-dim: #2f8f6c;
+  --danger: #e0616b;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.app-header {
+  padding: 12px 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-header h1 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.tab-btn.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+main {
+  padding: 16px;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+.hint {
+  color: var(--text-dim);
+  margin: 0;
+}
+
+input[type="file"],
+input[type="text"],
+input[type="number"],
+textarea,
+select {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  width: 100%;
+}
+
+textarea {
+  resize: vertical;
+  font-family: inherit;
+}
+
+button {
+  background: var(--accent-dim);
+  color: #06120d;
+  border: none;
+  padding: 7px 14px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+button:hover {
+  background: var(--accent);
+}
+
+button:disabled {
+  background: var(--border);
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.status {
+  color: var(--text-dim);
+  min-height: 1em;
+}
+
+.status.is-error {
+  color: var(--danger);
+}
+
+.txn-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.txn-table th,
+.txn-table td {
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.txn-table th {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.answer {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+#rec-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rec-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.rec-card h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+
+.rec-card .risk-level {
+  display: inline-block;
+  color: var(--accent);
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+
+.rec-card ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--text-dim);
+}

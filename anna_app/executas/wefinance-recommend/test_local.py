@@ -272,13 +272,64 @@ def main() -> int:
         ), final
         print("downgraded-response retry: OK (recovered into a success)")
 
-        # 7. health -- executa-lifecycle.md's documented shape
+        # 7. monthly_income supplied -> investable amount must be the
+        #    deterministic income-minus-spending surplus, not the spending
+        #    heuristic, and the stated income + surplus basis must show up in
+        #    the prompt sent to the model (Anna App Review finding: the tool
+        #    was previously ignoring an explicitly stated income entirely).
+        send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "invoke",
+                "params": {
+                    "tool": "generate_recommendations",
+                    "arguments": {
+                        "transactions": SAMPLE_TRANSACTIONS,
+                        "risk_profile": "balanced",
+                        "investment_goal": "5-year horizon growth",
+                        "monthly_income": 8000,
+                        "investment_horizon": "5 years",
+                    },
+                    "context": {"invoke_id": "test-invoke-income"},
+                },
+            },
+        )
+        reverse_rpc = recv(proc)
+        assert reverse_rpc["method"] == "sampling/createMessage", reverse_rpc
+        prompt_text = reverse_rpc["params"]["messages"][0]["content"]["text"]
+        assert "Stated monthly income: 8000.00 USD" in prompt_text, prompt_text
+        assert "verified monthly surplus" in prompt_text, prompt_text
+        assert "Investment horizon: 5 years" in prompt_text, prompt_text
+        # monthly_average across the 2 months of SAMPLE_TRANSACTIONS is 310
+        # (270 dining + 40 transit), so surplus should be 8000 - 310 = 7690.00
+        assert "7690.00 USD" in prompt_text, prompt_text
+        send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": reverse_rpc["id"],
+                "result": {
+                    "role": "assistant",
+                    "content": {"type": "text", "text": json.dumps(FAKE_RECS)},
+                },
+            },
+        )
+        final = recv(proc)
+        assert final["id"] == 10, final
+        assert final["result"]["success"] is True, final
+        print(
+            "monthly_income supplied: OK (deterministic surplus in prompt, not heuristic)"
+        )
+
+        # 8. health -- executa-lifecycle.md's documented shape
         send(proc, {"jsonrpc": "2.0", "id": 7, "method": "health"})
         resp = recv(proc)
         assert resp["result"]["status"] == "ready", resp
         print("health: OK")
 
-        # 8. malformed JSON on stdin -> documented -32700 parse error, and
+        # 9. malformed JSON on stdin -> documented -32700 parse error, and
         #    the reader thread must survive it (not silently die).
         assert proc.stdin is not None
         proc.stdin.write("not valid json\n")
@@ -287,7 +338,7 @@ def main() -> int:
         assert resp["error"]["code"] == -32700, resp
         print("malformed JSON: OK (-32700, reader thread survived)")
 
-        # 9. shutdown handler
+        # 10. shutdown handler
         send(proc, {"jsonrpc": "2.0", "id": 9, "method": "shutdown"})
         resp = recv(proc)
         assert resp["result"]["ok"] is True, resp

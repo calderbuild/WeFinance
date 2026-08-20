@@ -50,6 +50,8 @@ ever causes the model to attempt a tool call instead of answering directly
 have nothing to call, but this hasn't been exercised against a real host).
 """
 
+import base64
+import binascii
 import hashlib
 import json
 import queue
@@ -62,7 +64,7 @@ from datetime import date, datetime
 MANIFEST = {
     "name": "wefinance-ocr",
     "display_name": "WeFinance Bill Scanner",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "description": "Extract structured transactions from a photo of a bill, receipt, or payment screenshot.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample", "llm.agent.auto"],
@@ -506,12 +508,44 @@ def close_session(app_session_uuid: str) -> None:
         print(f"session.delete failed (non-fatal): {exc}", file=sys.stderr)
 
 
+# --- Image payload sanitization ----------------------------------------------
+# The Anna host rejects agent/session.run's attachments[].data with a 400 if it
+# isn't clean base64. Callers (the Anna App UI, a browser file input, etc.) may
+# naturally hand us a full `data:image/jpeg;base64,...` URI or base64 wrapped
+# with newlines -- neither is clean base64, and the host's rejection surfaces
+# as an opaque 400 deep inside session.run with no hint about the real cause.
+# Strip/validate here so a bad payload fails fast with an actionable message
+# instead of that opaque 400.
+
+
+def _sanitize_base64_image(image_base64: str) -> str:
+    s = (image_base64 or "").strip()
+    if s.lower().startswith("data:"):
+        comma = s.find(",")
+        if comma != -1:
+            s = s[comma + 1 :]
+    return re.sub(r"\s+", "", s)
+
+
+def _validate_base64_image(image_base64: str) -> str:
+    """Returns sanitized base64, or raises ValueError with a caller-facing message."""
+    sanitized = _sanitize_base64_image(image_base64)
+    if not sanitized:
+        raise ValueError("image_base64 is empty after removing any data: URI prefix")
+    try:
+        base64.b64decode(sanitized, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"image_base64 is not valid base64 image data: {exc}") from exc
+    return sanitized
+
+
 # --- Tool logic --------------------------------------------------------------
 
 
 def extract_transactions(
     invoke_id: str, image_base64: str, image_type: str, filename: str
 ) -> list:
+    image_base64 = _validate_base64_image(image_base64)
     source_hash = hashlib.sha256(image_base64.encode("utf-8")).hexdigest()
 
     app_session_uuid = create_session(invoke_id)
