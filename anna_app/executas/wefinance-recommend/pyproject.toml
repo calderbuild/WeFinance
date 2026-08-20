@@ -1,6 +1,6 @@
 [project]
 name = "wefinance-recommend"
-version = "0.1.4"
+version = "0.1.5"
 description = "Generate explainable investment recommendations grounded in real spending data."
 requires-python = ">=3.10"
 dependencies = []
