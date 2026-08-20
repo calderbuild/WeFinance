@@ -27,7 +27,7 @@ import uuid
 MANIFEST = {
     "name": "wefinance-chat",
     "display_name": "WeFinance Advisor Chat",
-    "version": "0.1.3",
+    "version": "0.1.4",
     "description": "Ask financial questions about your spending and get advice grounded in your actual transactions.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample"],
@@ -165,7 +165,7 @@ def _send(obj: dict) -> None:
     sys.stdout.flush()
 
 
-def sample(invoke_id: str, prompt: str, *, max_tokens: int = 400) -> str:
+def sample(invoke_id: str, prompt: str, *, max_tokens: int = 2000) -> str:
     if not v2_negotiated:
         raise RuntimeError(
             "Sampling unavailable: host did not negotiate protocol v2 for this session."

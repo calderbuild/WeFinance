@@ -15,15 +15,15 @@ const state = {
 let anna;
 
 async function callTool(toolId, method, args) {
-  const resp = await anna.tools.invoke({ tool_id: toolId, method, args });
-  if (!resp.ok) {
-    throw new Error(resp.error?.message || `${method} failed`);
+  // anna.tools.invoke() resolves directly to the executa's own `data` payload
+  // on success (host already unwraps the {success, data} envelope) and
+  // throws a real Error (with .code/.details) on failure -- see the SDK's
+  // own usage example and error-shape note in _sdk/latest/index.js.
+  try {
+    return await anna.tools.invoke({ tool_id: toolId, method, args });
+  } catch (err) {
+    throw new Error(err?.message || err?.code || `${method} failed`);
   }
-  const result = resp.result;
-  if (!result || result.success !== true) {
-    throw new Error(result?.error || `${method} returned no data`);
-  }
-  return result.data;
 }
 
 function stripDataUriPrefix(base64) {
