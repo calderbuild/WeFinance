@@ -1,9 +1,30 @@
 {
-  "schema": 1,
+  "schema": 2,
   "required_executas": [
     { "tool_id": "tool-calderbuild-wefinance-bill-scanner-swymwa2w" },
     { "tool_id": "tool-calderbuild-wefinance-advisor-chat-zm45qs9z" },
     { "tool_id": "tool-calderbuild-wefinance-investment-recommendations-r2q5jdey" }
   ],
-  "system_prompt_addendum": "WeFinance is a receipt-to-insights personal finance assistant. When the user shares a photo of a bill, receipt, or payment screenshot, use wefinance-ocr's extract_transactions to turn it into structured transactions (date, merchant, category, amount, currency) -- present the extracted rows back to the user before assuming they're correct, since OCR can misread handwriting or low-quality photos. Once the user has some transaction history in the conversation, use wefinance-recommend's generate_recommendations for explainable, data-grounded investment advice (it needs a risk_profile: conservative/balanced/aggressive, and an optional investment_goal) -- always relay the rationale_steps it returns, not just the title, since the explainability is the point. For open-ended financial questions ('where did my money go this week', 'can I afford X'), use wefinance-chat's ask_advisor with a plain-text summary of the relevant transactions as context. Never fabricate transaction data or spending figures that didn't come from one of these three tools."
+  "permissions": ["tools.invoke", "storage.read", "storage.write"],
+  "system_prompt_addendum": "WeFinance is a receipt-to-insights personal finance assistant. When the user shares a photo of a bill, receipt, or payment screenshot, use wefinance-ocr's extract_transactions to turn it into structured transactions (date, merchant, category, amount, currency) -- present the extracted rows back to the user before assuming they're correct, since OCR can misread handwriting or low-quality photos. Once the user has some transaction history in the conversation, use wefinance-recommend's generate_recommendations for explainable, data-grounded investment advice (it needs a risk_profile: conservative/balanced/aggressive; also pass monthly_income and investment_horizon whenever the user has stated them, so the recommendation reflects their real income-minus-spending surplus instead of a spending-only estimate) -- always relay the rationale_steps it returns, not just the title, since the explainability is the point. For open-ended financial questions ('where did my money go this week', 'can I afford X'), use wefinance-chat's ask_advisor with a plain-text summary of the relevant transactions as context. Never fabricate transaction data or spending figures that didn't come from one of these three tools. The user can also open the WeFinance window (open_app_view) for a dedicated scan / ask / recommend UI backed by the same three tools.",
+  "ui": {
+    "bundle": { "format": "static-spa", "entry": "index.html" },
+    "views": [
+      {
+        "name": "main",
+        "title": "WeFinance",
+        "default": true,
+        "min_size": { "w": 480, "h": 360 },
+        "default_size": { "w": 960, "h": 640 },
+        "max_size": { "w": 1600, "h": 1000 },
+        "resizable": true,
+        "movable": true,
+        "single_instance": true
+      }
+    ],
+    "host_api": {
+      "tools": ["required:*"],
+      "storage": ["get", "set", "delete"]
+    }
+  }
 }

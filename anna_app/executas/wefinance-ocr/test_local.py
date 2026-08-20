@@ -159,9 +159,9 @@ def main() -> int:
         run_rpc = recv(proc)
         assert run_rpc["method"] == "agent/session.run", run_rpc
         assert run_rpc["params"]["app_session_uuid"] == "sess-fake-1", run_rpc
-        assert run_rpc["params"]["modelPreferences"]["hints"][0]["name"] == "gemini", (
-            run_rpc
-        )
+        assert (
+            run_rpc["params"]["modelPreferences"]["hints"][0]["name"] == "gemini"
+        ), run_rpc
         attachments = run_rpc["params"]["attachments"]
         assert len(attachments) == 1, run_rpc
         assert attachments[0]["type"] == "image/jpeg", run_rpc
@@ -295,6 +295,95 @@ def main() -> int:
         txns = final["result"]["data"]["transactions"]
         assert len(txns) == 1 and txns[0]["merchant"] == "Test Shop", final
         print("sentinel 'complete' frame: OK (fell back to accumulated deltas)")
+
+        # 5a. image_base64 arrives as a data: URI (the natural shape a browser
+        #     file input / Anna App UI FileReader would hand us) -> must be
+        #     stripped to clean base64 before it's forwarded as an attachment,
+        #     and the sanitized (not raw) value must be what session.run sees.
+        #     This is the fix for the Anna App Review's Bill Scanner 400:
+        #     "the image payload is not accepted as valid base64 image data."
+        data_uri = f"data:image/png;base64,{FAKE_IMAGE_BASE64}"
+        send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 51,
+                "method": "invoke",
+                "params": {
+                    "tool": "extract_transactions",
+                    "arguments": {
+                        "image_base64": data_uri,
+                        "image_type": "image/png",
+                    },
+                    "context": {"invoke_id": "test-invoke-datauri"},
+                },
+            },
+        )
+        create_rpc = recv(proc)
+        assert create_rpc["method"] == "agent/session.create", create_rpc
+        send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": create_rpc["id"],
+                "result": {"app_session_uuid": "sess-fake-datauri"},
+            },
+        )
+        run_rpc = recv(proc)
+        assert run_rpc["method"] == "agent/session.run", run_rpc
+        assert run_rpc["params"]["attachments"][0]["data"] == FAKE_IMAGE_BASE64, (
+            "data: URI prefix must be stripped before forwarding",
+            run_rpc,
+        )
+        send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": run_rpc["id"],
+                "result": {
+                    "run_id": "run-fake-datauri",
+                    "stream_id": "strm-fake-datauri",
+                    "frames": [
+                        {"event": "final", "text": json.dumps(FAKE_OCR_RESPONSE)}
+                    ],
+                    "final": True,
+                },
+            },
+        )
+        close_rpc = recv(proc)
+        assert close_rpc["method"] == "agent/session.delete", close_rpc
+        send(
+            proc,
+            {"jsonrpc": "2.0", "id": close_rpc["id"], "result": {"status": "deleted"}},
+        )
+        final = recv(proc)
+        assert final["id"] == 51, final
+        assert final["result"]["success"] is True, final
+        print("data: URI prefix: OK (stripped before forwarding to session.run)")
+
+        # 5b. genuinely invalid base64 -> fails fast with a clear message,
+        #     never silently forwarded to session.run.
+        send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 52,
+                "method": "invoke",
+                "params": {
+                    "tool": "extract_transactions",
+                    "arguments": {
+                        "image_base64": "not-valid-base64!!! ###",
+                        "image_type": "image/png",
+                    },
+                },
+            },
+        )
+        resp = recv(proc)
+        assert resp["result"]["success"] is False, resp
+        assert "not valid base64" in resp["result"]["error"], resp
+        print(
+            "invalid base64: OK (rejected fast with a clear error, no session opened)"
+        )
 
         # 6. health -- executa-lifecycle.md's documented shape
         send(proc, {"jsonrpc": "2.0", "id": 6, "method": "health"})

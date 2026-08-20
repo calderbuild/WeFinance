@@ -23,7 +23,7 @@ from collections import defaultdict
 MANIFEST = {
     "name": "wefinance-recommend",
     "display_name": "WeFinance Investment Recommendations",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "description": "Generate explainable investment recommendations grounded in the user's real spending data.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample"],
@@ -53,6 +53,22 @@ MANIFEST = {
                     "name": "investment_goal",
                     "type": "string",
                     "description": "Free-text investment goal, e.g. 'car down payment in 3 years'. Optional.",
+                    "required": False,
+                },
+                {
+                    "name": "monthly_income",
+                    "type": "number",
+                    "description": (
+                        "User's explicitly stated monthly income, if they gave one. When "
+                        "provided, the investable amount is computed as monthly_income minus "
+                        "average monthly spending instead of a spending-only heuristic. Optional."
+                    ),
+                    "required": False,
+                },
+                {
+                    "name": "investment_horizon",
+                    "type": "string",
+                    "description": "Free-text investment horizon, e.g. '5 years'. Optional.",
                     "required": False,
                 },
             ],
@@ -195,24 +211,40 @@ def _detect_currency(rows: list) -> str:
     return "USD"
 
 
-def _estimate_investable(monthly_avg: float) -> float:
+def _estimate_investable(monthly_avg: float, monthly_income) -> tuple:
+    """Returns (investable_amount, basis) where basis is "income_minus_spending"
+    when the caller gave us a usable monthly_income, else "spending_heuristic".
+
+    The income-based path is a real, deterministic surplus calculation -- this
+    is what the Anna App Review flagged as missing: the tool was previously
+    ignoring an explicitly stated income and always falling back to the
+    heuristic below, so the outer model ended up doing this subtraction
+    itself instead of the dedicated Tool.
+    """
+    if isinstance(monthly_income, (int, float)) and monthly_income > 0:
+        return round(max(monthly_income - monthly_avg, 0.0), 2), "income_minus_spending"
     if monthly_avg <= 0:
-        return 0.0
+        return 0.0, "spending_heuristic"
     # NOTE: these tier thresholds are CNY-scaled magic numbers carried over
     # from the original service and are not currency-aware -- a $2,900/month
-    # USD spender gets the same low-tier ratio as a low CNY spender. Not part
-    # of the Anna App Review's blocking findings; left as-is for now.
+    # USD spender gets the same low-tier ratio as a low CNY spender. Only
+    # used as a fallback now that a stated income takes the branch above;
+    # still not currency-aware, left as-is for now.
     ratio = 0.1 if monthly_avg < 3_000 else 0.2 if monthly_avg < 10_000 else 0.3
-    return round(monthly_avg * ratio, 2)
+    return round(monthly_avg * ratio, 2), "spending_heuristic"
 
 
-def analyze_transactions(rows: list) -> dict:
+def analyze_transactions(rows: list, monthly_income=None) -> dict:
     monthly_avg = _monthly_average(rows)
+    investable_amount, investable_basis = _estimate_investable(
+        monthly_avg, monthly_income
+    )
     return {
         "monthly_average": monthly_avg,
         "spending_volatility": _spending_volatility(rows),
         "category_breakdown": _category_breakdown(rows),
-        "investable_amount": _estimate_investable(monthly_avg),
+        "investable_amount": investable_amount,
+        "investable_basis": investable_basis,
     }
 
 
@@ -367,7 +399,12 @@ def sample_structured(invoke_id: str, prompt: str, *, max_tokens: int = 800) -> 
 
 
 def build_prompt(
-    metrics: dict, risk_profile: str, investment_goal: str, currency: str = "USD"
+    metrics: dict,
+    risk_profile: str,
+    investment_goal: str,
+    currency: str = "USD",
+    monthly_income=None,
+    investment_horizon: str = "",
 ) -> str:
     monthly_avg = metrics["monthly_average"]
     breakdown = metrics["category_breakdown"]
@@ -379,14 +416,33 @@ def build_prompt(
         if breakdown and monthly_avg > 0
         else "  (no spending data yet)"
     )
+    if metrics.get("investable_basis") == "income_minus_spending":
+        investable_line = (
+            f"- Investable amount: {metrics['investable_amount']:.2f} {currency}/month "
+            f"(stated monthly income of {monthly_income:.2f} {currency} minus average "
+            "monthly spending -- this IS the user's verified monthly surplus, present it "
+            "as such)"
+        )
+    else:
+        investable_line = (
+            f"- Estimated investable amount: {metrics['investable_amount']:.2f} {currency}/month "
+            "(a heuristic derived from spending patterns, NOT a verified income-minus-expenses "
+            "surplus -- do not present it as the user's actual monthly surplus)"
+        )
+    income_line = (
+        f"- Stated monthly income: {monthly_income:.2f} {currency}\n"
+        if isinstance(monthly_income, (int, float)) and monthly_income > 0
+        else ""
+    )
     return f"""You are a professional financial advisor. Give personalized investment recommendations based on the user's real spending data.
 
 User financial profile:
-- Average monthly spending: {monthly_avg:.2f} {currency}
+{income_line}- Average monthly spending: {monthly_avg:.2f} {currency}
 - Spending volatility: {metrics["spending_volatility"]:.2%} (higher means less predictable spending)
-- Estimated investable amount: {metrics["investable_amount"]:.2f} {currency}/month (a heuristic derived from spending patterns, NOT a verified income-minus-expenses surplus -- do not present it as the user's actual monthly surplus)
+{investable_line}
 - Risk profile: {RISK_LABELS.get(risk_profile, risk_profile)}
 - Investment goal: {investment_goal or "not specified"}
+- Investment horizon: {investment_horizon or "not specified"}
 
 Spending breakdown (top 5 categories):
 {breakdown_str}
@@ -398,18 +454,30 @@ Based on this data, generate 2-3 specific, personalized investment recommendatio
 4. A risk level (Conservative / Balanced / Aggressive)
 
 Requirements:
-- Base every recommendation on the user's real data (spending amount, structure, volatility)
+- Base every recommendation on the user's real data (income if stated, spending amount, structure, volatility, horizon if stated)
 - Rationale steps must show cause and effect, not generic advice
 - Avoid generic, one-size-fits-all suggestions -- personalize to this user's numbers
-- If the estimated investable amount is small relative to monthly spending, say so honestly and suggest realistic, low-barrier options instead of assuming a large investable surplus"""
+- If the investable amount is small relative to monthly spending, say so honestly and suggest realistic, low-barrier options instead of assuming a large investable surplus"""
 
 
 def generate_recommendations(
-    invoke_id: str, transactions: list, risk_profile: str, investment_goal: str
+    invoke_id: str,
+    transactions: list,
+    risk_profile: str,
+    investment_goal: str,
+    monthly_income=None,
+    investment_horizon: str = "",
 ) -> list:
-    metrics = analyze_transactions(transactions)
+    metrics = analyze_transactions(transactions, monthly_income)
     currency = _detect_currency(transactions)
-    prompt = build_prompt(metrics, risk_profile, investment_goal, currency)
+    prompt = build_prompt(
+        metrics,
+        risk_profile,
+        investment_goal,
+        currency,
+        monthly_income,
+        investment_horizon,
+    )
     data = sample_structured(invoke_id, prompt)
     return data.get("recommendations", [])
 
@@ -468,6 +536,18 @@ def handle(req: dict) -> dict:
         transactions = args.get("transactions") or []
         risk_profile = args.get("risk_profile", "balanced")
         investment_goal = args.get("investment_goal", "")
+        investment_horizon = args.get("investment_horizon", "")
+
+        monthly_income = None
+        raw_income = args.get("monthly_income")
+        if raw_income is not None:
+            try:
+                monthly_income = float(raw_income)
+            except (TypeError, ValueError):
+                print(
+                    f"monthly_income {raw_income!r} is not numeric, ignoring",
+                    file=sys.stderr,
+                )
 
         if not transactions:
             return {
@@ -481,7 +561,12 @@ def handle(req: dict) -> dict:
 
         try:
             recs = generate_recommendations(
-                invoke_id, transactions, risk_profile, investment_goal
+                invoke_id,
+                transactions,
+                risk_profile,
+                investment_goal,
+                monthly_income,
+                investment_horizon,
             )
             return {
                 "jsonrpc": "2.0",
