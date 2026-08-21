@@ -81,3 +81,15 @@ artifacts/
 
 # Claude Code session-continuity snapshots (auto-generated, not project docs)
 docs/handoffs/
+
+# Stray pasted screenshots at the repo root.
+# Anchored with a leading slash so assets/ and hackathon/ images stay tracked.
+/image.png
+/image*.png
+/image*.jpg
+/Screenshot*.png
+/CleanShot*.png
+
+# Reference PDFs dropped into docs/plans while drafting (hackathon guides etc).
+# hackathon/goai-2026-manual.pdf is tracked deliberately and is unaffected.
+docs/plans/*.pdf
