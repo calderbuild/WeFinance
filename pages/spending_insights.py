@@ -27,6 +27,7 @@ def _prepare_dashboard_data(
     transactions_dump: Tuple[Tuple[Tuple[str, object], ...], ...],
     whitelist: Tuple[str, ...],
     base_threshold: float,
+    locale: str,
 ) -> dict:
     """Pre-compute analytics outputs for the dashboard."""
     transactions = [Transaction(**dict(entry)) for entry in transactions_dump]
@@ -38,8 +39,9 @@ def _prepare_dashboard_data(
         transactions,
         base_threshold=base_threshold,
         whitelist_merchants=whitelist,
+        locale=locale,
     )
-    insights = generate_insights(transactions)
+    insights = generate_insights(transactions, locale=locale)
 
     return {
         "category_totals": category_totals,
@@ -61,7 +63,7 @@ def _render_active_anomalies(
         )
     for idx, anomaly in enumerate(anomalies):
         date_str = anomaly.get("date") or "-"
-        merchant = anomaly.get("merchant") or "未知商户"
+        merchant = anomaly.get("merchant") or i18n.t("common.unknown_merchant")
         amount = anomaly.get("amount", 0.0)
         reason = anomaly.get("reason", "")
         status = anomaly.get("status", "new")
@@ -73,6 +75,7 @@ def _render_active_anomalies(
                 date=date_str,
                 merchant=merchant,
                 amount=f"{float(amount):,.2f}",
+                currency=i18n.currency_symbol,
             )
         ):
             if reason:
@@ -133,7 +136,7 @@ def _render_sidebar_controls(trusted_merchants: List[str], i18n) -> None:
             st.write(i18n.t("spending.history_empty"))
         else:
             for record in history:
-                merchant = record.get("merchant") or "未知商户"
+                merchant = record.get("merchant") or i18n.t("common.unknown_merchant")
                 amount = record.get("amount", 0.0)
                 status = record.get("status", "confirmed")
                 date_str = record.get("date", "-")
@@ -142,7 +145,9 @@ def _render_sidebar_controls(trusted_merchants: List[str], i18n) -> None:
                     if status == "confirmed"
                     else "🚨 " + i18n.t("common.btn_mark_fraud")
                 )
-                st.write(f"{date_str} | {merchant} | ¥{amount:.2f} | {label}")
+                st.write(
+                    f"{date_str} | {merchant} | {i18n.currency_symbol}{amount:.2f} | {label}"
+                )
 
 
 def render() -> None:
@@ -167,7 +172,9 @@ def render() -> None:
         for tx in transactions
     )
     whitelist_tuple = tuple(sorted(trusted_merchants))
-    results = _prepare_dashboard_data(serialized, whitelist_tuple, base_threshold=2.5)
+    results = _prepare_dashboard_data(
+        serialized, whitelist_tuple, base_threshold=2.5, locale=i18n.locale
+    )
 
     totals = results["category_totals"]
     trend_daily: pd.DataFrame = results["trend_daily"]
@@ -195,7 +202,7 @@ def render() -> None:
                 pie_df,
                 names="category",
                 values="amount",
-                title="分类占比",
+                title=i18n.t("spending.pie_chart_title"),
                 hole=0.4,
             )
             fig_pie.update_traces(textposition="inside", textinfo="percent+label")
@@ -217,7 +224,10 @@ def render() -> None:
                     "amount": i18n.t("spending.label_amount"),
                 },
             )
-            fig_bar.update_traces(texttemplate="¥%{text:.2f}", textposition="outside")
+            fig_bar.update_traces(
+                texttemplate=f"{i18n.currency_symbol}%{{text:.2f}}",
+                textposition="outside",
+            )
             fig_bar.update_layout(
                 yaxis_title=i18n.t("spending.label_amount"),
                 margin=dict(t=40, b=40, l=40, r=0),
@@ -263,7 +273,7 @@ def render() -> None:
                 st.markdown(f"### {insight.title}")
                 st.write(insight.detail)
                 if insight.actions:
-                    st.markdown("**💡 行动建议：**")
+                    st.markdown(f"**{i18n.t('spending.action_suggestions_label')}**")
                     for idx, action in enumerate(insight.actions, 1):
                         st.markdown(f"{idx}. {action}")
                 st.markdown("---")

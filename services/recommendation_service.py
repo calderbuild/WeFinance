@@ -302,7 +302,7 @@ Requirements:
         """
         normalized = goal_text.strip()
         if not normalized:
-            return "未指定", None, None
+            return "", None, None
 
         amount_match = re.search(r"(\d+(?:\.\d+)?)\s*(万|千|元|块)?", normalized)
         amount_value = None
@@ -386,6 +386,10 @@ Requirements:
     def _estimate_investable(monthly_avg: float) -> float:
         if monthly_avg <= 0:
             return 0.0
+        # NOTE: these tier thresholds are CNY-scaled magic numbers carried over
+        # from the original service and are not currency-aware -- a $2,900/month
+        # USD spender gets the same low-tier ratio as a low CNY spender. Not part
+        # of the Anna App Review's blocking findings; left as-is for now.
         if monthly_avg < 3_000:
             ratio = 0.1
         elif monthly_avg < 10_000:
@@ -421,137 +425,6 @@ Requirements:
             "category_breakdown": breakdown,
             "investable_amount": investable,
         }
-
-    def _generate_llm_recommendations(
-        self,
-        metrics: Dict[str, float | Dict[str, float]],
-        risk_profile: str,
-        investment_goal: str,
-        locale: str,
-    ) -> List[Recommendation] | None:
-        """
-        使用LLM生成个性化投资推荐（基于真实消费数据）
-
-        Returns None if LLM call fails, allowing fallback to rule-based recommendations
-        """
-        try:
-            client = self._ensure_client()
-        except RuntimeError as e:
-            logger.warning(f"LLM client初始化失败: {e}")
-            return None
-
-        # 准备详细的用户财务画像
-        monthly_avg = float(metrics.get("monthly_average", 0.0) or 0.0)
-        volatility = float(metrics.get("spending_volatility", 0.0) or 0.0)
-        investable = float(metrics.get("investable_amount", 0.0) or 0.0)
-        breakdown = metrics.get("category_breakdown", {}) or {}
-
-        # 构建详细的prompt
-        risk_map = {
-            "conservative": "保守型（不愿承受波动，追求稳健收益）",
-            "balanced": "平衡型（可接受适度波动，追求收益与风险平衡）",
-            "aggressive": "进取型（可承受较大波动，追求高收益）",
-        }
-
-        breakdown_str = (
-            "\n".join(
-                f"  - {cat}: ¥{amt:.2f} ({amt / monthly_avg * 100:.1f}%)"
-                for cat, amt in list(breakdown.items())[:5]
-            )
-            if breakdown and monthly_avg > 0
-            else "  （暂无数据）"
-        )
-
-        system_prompt = f"""你是一位专业的理财顾问，根据用户的真实消费数据提供个性化投资建议。
-
-用户财务画像：
-- 月均消费：¥{monthly_avg:.2f}
-- 消费波动率：{volatility:.2%}（越高说明消费越不稳定）
-- 可投资金额：¥{investable:.2f}/月
-- 风险偏好：{risk_map.get(risk_profile, risk_profile)}
-- 投资目标：{investment_goal or "未指定具体目标"}
-
-消费结构（Top 5类目）：
-{breakdown_str}
-
-请基于以上数据，生成2-3条具体的理财建议。每条建议需要包含：
-1. 标题（简短有力，10字以内）
-2. 摘要（一句话说明这条建议的核心内容，30字左右）
-3. 推理步骤（2-4步，每步解释为什么这样建议，展示可解释性）
-4. 风险等级（保守型/平衡型/进取型）
-
-返回JSON格式：
-{{
-  "recommendations": [
-    {{
-      "title": "建议标题",
-      "summary": "核心内容摘要",
-      "rationale_steps": ["步骤1", "步骤2", "步骤3"],
-      "risk_level": "风险等级"
-    }}
-  ]
-}}
-
-要求：
-- 必须基于用户的真实数据（消费金额、结构、波动率）
-- 推理步骤要体现因果关系（"因为你的XX情况，所以建议YY"）
-- 避免通用建议，要个性化
-- 如果可投资金额很少(<500元/月)，诚实告知并给出实际可行的建议
-"""
-
-        try:
-            response = client.chat.completions.create(
-                model=self.model,
-                temperature=0.3,  # 稍高温度允许创造性，但保持合理性
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": "请基于我的财务数据，生成个性化理财建议。",
-                    },
-                ],
-                timeout=30,
-            )
-
-            content = response.choices[0].message.content
-            if not content:
-                logger.warning("LLM返回空内容")
-                return None
-
-            data = self._parse_llm_json(content)
-            if not isinstance(data, dict):
-                logger.warning("LLM推荐响应不是字典")
-                return None
-            recs_data = data.get("recommendations", [])
-
-            if not recs_data:
-                logger.warning("LLM返回的JSON中没有recommendations")
-                return None
-
-            # 转换为Recommendation对象
-            recommendations = []
-            for rec in recs_data:
-                recommendations.append(
-                    Recommendation(
-                        title=rec.get("title", ""),
-                        summary=rec.get("summary", ""),
-                        rationale_steps=rec.get("rationale_steps", []),
-                        risk_level=rec.get("risk_level")
-                        or risk_map.get(risk_profile, "平衡型"),
-                    )
-                )
-
-            logger.info(f"LLM生成了{len(recommendations)}条个性化推荐")
-            return recommendations
-
-        except json.JSONDecodeError as e:
-            logger.warning(
-                f"LLM响应JSON解析失败: {e}, content={content[:200] if content else 'None'}"
-            )
-            return None
-        except Exception as e:
-            logger.warning(f"LLM推荐生成失败: {e}")
-            return None
 
     def generate_recommendations(
         self,
@@ -589,17 +462,20 @@ Requirements:
             invest_pct=invest_pct,
             allocation=allocation_desc,
             goal=goal_text,
+            currency=i18n.currency_symbol,
         )
         primary_steps = [
             i18n.t(
                 "recommendation.primary_step_spend",
                 monthly=monthly_avg,
                 volatility=volatility,
+                currency=i18n.currency_symbol,
             ),
             i18n.t(
                 "recommendation.primary_step_buffer",
                 buffer_low=buffer_low,
                 buffer_high=buffer_high,
+                currency=i18n.currency_symbol,
             ),
             i18n.t(
                 "recommendation.primary_step_invest",
@@ -620,21 +496,23 @@ Requirements:
 
         if breakdown:
             top_category, share = next(iter(breakdown.items()))
+            display_category = i18n.translate_category(top_category)
             recs.append(
                 Recommendation(
                     title=i18n.t(
-                        "recommendation.category_tip_title", category=top_category
+                        "recommendation.category_tip_title", category=display_category
                     ),
                     summary=i18n.t(
                         "recommendation.category_tip_summary",
-                        category=top_category,
+                        category=display_category,
                         share=share * 100,
                     ),
                     rationale_steps=[
                         i18n.t(
                             "recommendation.category_tip_step",
-                            category=top_category,
+                            category=display_category,
                             investable=investable,
+                            currency=i18n.currency_symbol,
                         )
                     ],
                     risk_level=risk_name,

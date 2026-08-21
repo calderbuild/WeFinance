@@ -46,10 +46,10 @@ Application opens at: `http://localhost:8501`
 pytest tests/ -v
 
 # Run specific test file
-pytest tests/test_ocr_service.py -v
+pytest tests/test_vision_ocr_service.py -v
 
 # Run single test function
-pytest tests/test_ocr_service.py::test_vision_ocr_integration -v
+pytest tests/test_vision_ocr_service.py::test_extract_transactions_from_image_parses_mocked_response -v
 
 # Run with coverage report
 pytest --cov=modules --cov=services --cov=utils --cov-report=term-missing
@@ -592,6 +592,27 @@ def chat(query):
 
 ## Architecture Decisions Log
 
+### 2026-08-18: Code Quality & i18n Optimization Pass
+
+**Problem**: Two Explore agents surveying the codebase found (1) currency/locale leaks all sharing one root cause — ad-hoc `"中文" if locale == "zh_CN" else "English"` ternaries scattered across `app.py` and `pages/investment_recs.py` instead of routing through the `i18n.t()` JSON system, (2) the entire `tests/` directory had been deleted in a past commit ("temporary development tests"), leaving CLAUDE.md/AGENTS.md referencing a suite that no longer existed, and (3) two dead-code blocks (`services/structuring_service.py`, `RecommendationService._generate_llm_recommendations()`) had zero callers.
+
+**Solution**: Six-phase pass — dead code removal; ternary → `i18n.t()` refactor (~59 sites across `app.py` and `pages/investment_recs.py`, with new key pairs added to both locale JSON files); currency/i18n leak fixes in `modules/analysis.py`, `services/langchain_agent.py`, `pages/spending_insights.py`, `pages/bill_upload.py`; error-handling consistency (`timeout=15` on both `chat_manager.py` OpenAI calls, a try/except wrap around the streaming loop in `advisor_chat.py`); and a full test-suite rebuild (12 files, 150 tests) prioritizing actual coverage gaps over blindly recreating the deleted files.
+
+Writing tests against the real code surfaced several genuine, previously-undiscovered bugs, each verified by direct reproduction before and after the fix:
+- `modules/chat_manager.py:generate_response()`'s streaming path `yield`ed the heuristic-match and LangChain-agent-match answers but never `return`ed afterward — execution fell through and also called the live OpenAI API, appending a second unrelated response after the canned answer and wasting a call on every heuristic-matched question. The pre-existing retry-exhaustion fallback had the same bug (fixed earlier in this same pass).
+- `pages/bill_upload.py:_parse_excel_file()` — a blank Excel cell round-trips through pandas as `float('nan')`, and `str(nan)` is the truthy string `"nan"`. This silently defeated the merchant/category/currency/payment-method "skip if missing" checks (a blank merchant cell became a transaction literally named "nan") and let NaN amounts slip past the zero-amount filter (`nan <= 0` is `False` in Python), poisoning downstream sums. Fixed with a shared `_excel_cell_str()` helper that treats `pd.isna()` as blank.
+- `pages/bill_upload.py:_parse_manual_input()`'s CSV branch referenced an undefined `idx` whenever a pasted row lacked an explicit `id` column — a `NameError` crash on the most common manual-entry case.
+- `app.py:_refresh_anomaly_state()`'s cache-invalidation hash didn't include `locale`, so switching languages alone wouldn't refresh anomaly `reason` text after Phase 3 made that text locale-aware.
+- `pages/spending_insights.py` never passed `locale` to `generate_insights()` at all — the LLM-failure fallback insights always rendered in Chinese regardless of the UI's actual language.
+
+**Impact**: No remaining literal-string locale ternaries in the two files that had them; locale JSON key-parity holds (zh_CN/en_US identical keys outside the deliberate `categories.*` en_US-only namespace); real test coverage where there was near-zero before (`modules/analysis.py` 71%, `services/recommendation_service.py` 59%, `modules/chat_manager.py` 68%); five real bugs fixed as a byproduct of writing tests against actual behavior rather than assumed behavior.
+
+**Scope boundary**: `anna_app/executas/` (the Anna Executa layer, mid external review at the time) was never touched — verified via `git diff --stat anna_app/` returning empty at the end of the pass.
+
+**Files Changed**: `locales/zh_CN.json`, `locales/en_US.json`, `app.py`, `pages/investment_recs.py`, `pages/spending_insights.py`, `pages/bill_upload.py`, `pages/business_profile.py`, `pages/advisor_chat.py`, `modules/analysis.py`, `modules/chat_manager.py`, `services/langchain_agent.py`; REMOVED: `services/structuring_service.py`; NEW: `tests/` (12 files, `conftest.py` + 11 test modules).
+
+**Testing**: `pytest tests/ -v` — 150 passed. `pytest --cov=modules --cov=services --cov=utils --cov-report=term-missing` — 68% overall, concentrated on the modules the plan targeted.
+
 ### 2025-11-15: Vision OCR Multi-line Recognition Enhancement
 
 **Problem**: LLM only recognized the first transaction in multi-row bills, merging multiple transactions into one record.
@@ -817,7 +838,6 @@ WeFinance/
 │   ├── __init__.py
 │   ├── vision_ocr_service.py  # GPT-4o Vision OCR (core innovation)
 │   ├── ocr_service.py         # OCR facade (delegates to VisionOCRService)
-│   ├── structuring_service.py # Legacy GPT-4o structuring (deprecated)
 │   ├── recommendation_service.py # Investment recommendation generation
 │   └── langchain_agent.py     # LangChain agent wrapper (optional)
 │
@@ -839,14 +859,18 @@ WeFinance/
 │
 ├── tests/                     # Test suite (pytest)
 │   ├── __init__.py
-│   ├── test_integration.py    # End-to-end scenarios
-│   ├── test_ocr_service.py    # Vision OCR tests
-│   ├── test_chat_manager.py   # Chat manager tests
-│   ├── test_session_state.py  # Session state tests
-│   ├── test_error_handling.py # Error handling tests (NEW)
-│   ├── test_storage.py        # Storage tests (NEW)
-│   ├── test_structuring_service.py # Legacy tests
-│   └── test_i18n.py           # i18n tests
+│   ├── conftest.py                    # Shared fixtures (session state, storage isolation, sample data)
+│   ├── test_i18n.py                   # Translation lookup, key-parity regression guard
+│   ├── test_error_handling.py         # safe_call, UserFacingError
+│   ├── test_storage.py                # File-based persistence
+│   ├── test_session_state.py          # Session helpers, anomaly feedback, chat cache keys
+│   ├── test_analysis.py               # Category/trend calculations, anomaly detection, locale-leak regressions
+│   ├── test_chat_manager.py           # Context assembly, caching, heuristic short-circuit, streaming-fallback regression
+│   ├── test_recommendation_service.py # Allocation math, risk assessment, LLM-unavailable fallback paths
+│   ├── test_vision_ocr_service.py     # JSON/markdown-fence parsing, transaction validation, mocked Vision API call
+│   ├── test_bill_upload_parsing.py    # Excel/CSV/manual-input parsing, localized error messages
+│   ├── test_langchain_agent.py        # Tool functions, locale-aware currency symbol
+│   └── test_integration.py            # End-to-end happy-path scenarios
 │
 ├── assets/                    # Static assets
 │   └── sample_bills/          # Sample bill images for testing

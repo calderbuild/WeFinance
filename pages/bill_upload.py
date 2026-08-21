@@ -17,7 +17,12 @@ from models.entities import OCRParseResult, Transaction
 from modules.analysis import generate_insights
 from services.ocr_service import MAX_FILE_SIZE_BYTES, OCRService
 from utils.error_handling import UserFacingError
-from utils.session import get_i18n, get_transactions, set_analysis_summary, set_transactions
+from utils.session import (
+    get_i18n,
+    get_transactions,
+    set_analysis_summary,
+    set_transactions,
+)
 from utils.transactions import generate_transaction_id
 from utils.ui_components import (
     render_financial_health_card,
@@ -33,6 +38,19 @@ def _is_structured_file(filename: str) -> bool:
 
     suffix = Path(filename or "").suffix.lower()
     return suffix in STRUCTURED_FILE_EXTENSIONS
+
+
+def _excel_cell_str(value, default: str = "") -> str:
+    """Stringify an Excel cell, treating blank cells (NaN) as empty.
+
+    pandas reads a blank Excel cell back as float('nan'), and str(nan)
+    is the truthy string "nan" -- without this guard, blank merchant/
+    category/currency cells silently become literal "nan" values.
+    """
+    if pd.isna(value):
+        return default
+    text = str(value).strip()
+    return text or default
 
 
 def _parse_excel_file(file_bytes: bytes, i18n=None) -> List[Transaction]:
@@ -93,17 +111,11 @@ def _parse_excel_file(file_bytes: bytes, i18n=None) -> List[Transaction]:
         # Check if we have minimum required fields
         mapped_fields = set(column_map.values())
         if "date" not in mapped_fields:
-            raise ValueError(
-                f"缺少日期列。Excel文件必须包含以下列之一: posting_date, date, transaction_date, clear_date"
-            )
+            raise ValueError(i18n.t("bill_upload.excel_missing_date_column"))
         if "merchant" not in mapped_fields:
-            raise ValueError(
-                f"缺少商户列。Excel文件必须包含以下列之一: merchant, name_customer, customer_name, vendor"
-            )
+            raise ValueError(i18n.t("bill_upload.excel_missing_merchant_column"))
         if "amount" not in mapped_fields:
-            raise ValueError(
-                f"缺少金额列。Excel文件必须包含以下列之一: amount, total_open_amount, total_amount"
-            )
+            raise ValueError(i18n.t("bill_upload.excel_missing_amount_column"))
 
         # Rename columns according to mapping
         df_renamed = df.rename(columns=column_map)
@@ -124,23 +136,23 @@ def _parse_excel_file(file_bytes: bytes, i18n=None) -> List[Transaction]:
                 date_str = str(date_val).strip()
 
             # Skip if merchant is missing
-            merchant = str(row.get("merchant", "")).strip()
+            merchant = _excel_cell_str(row.get("merchant"))
             if not merchant:
                 continue
 
             # Category is optional, use default if missing
-            category = str(row.get("category", "")).strip() or "其他"
+            category = _excel_cell_str(row.get("category"), default="其他")
 
             try:
                 amount = float(row.get("amount", 0))
             except (TypeError, ValueError):
                 continue
 
-            # Skip zero or negative amounts
-            if amount <= 0:
+            # Skip zero, negative, or blank (NaN) amounts
+            if not amount > 0:
                 continue
 
-            currency = str(row.get("currency", "CNY")).strip() or "CNY"
+            currency = _excel_cell_str(row.get("currency"), default="CNY")
             txn_id = generate_transaction_id(
                 merchant=merchant,
                 date_value=date_str,
@@ -152,26 +164,24 @@ def _parse_excel_file(file_bytes: bytes, i18n=None) -> List[Transaction]:
 
             transactions.append(
                 Transaction(
-                    id=row.get("id", "").strip() or txn_id,
+                    id=_excel_cell_str(row.get("id")) or txn_id,
                     date=date_str,
                     merchant=merchant,
                     category=category,
                     amount=amount,
                     currency=currency,
-                    payment_method=str(row.get("payment_method", "")).strip() or None,
+                    payment_method=_excel_cell_str(row.get("payment_method")) or None,
                 )
             )
 
         if not transactions:
-            raise ValueError(
-                f"Excel文件中没有有效的交易记录。请确保数据行包含有效的日期、商户和金额。"
-            )
+            raise ValueError(i18n.t("bill_upload.excel_no_valid_transactions"))
 
         return transactions
 
     except Exception as exc:
         raise ValueError(
-            f"Excel文件解析失败: {str(exc)}"
+            i18n.t("bill_upload.excel_parse_failed", error=str(exc))
         ) from exc
 
 
@@ -214,7 +224,7 @@ def _parse_manual_input(raw_text: str, i18n=None) -> List[Transaction]:
         raise ValueError(i18n.t("bill_upload.manual_error_csv_header"))
 
     transactions: List[Transaction] = []
-    for row in reader:
+    for idx, row in enumerate(reader, start=1):
         if not row:
             continue
         currency = row.get("currency", "CNY").strip() or "CNY"
@@ -511,32 +521,25 @@ def render() -> None:
                         csv_text = file_bytes.decode("utf-8")
                         structured_transactions = _parse_manual_input(csv_text, i18n)
                         file_text = csv_text
-                    except Exception as csv_exc:
+                    except Exception:
                         # Both failed, provide user-friendly error message
                         if "缺少" in excel_error or "missing" in excel_error.lower():
-                            parse_error = (
-                                f"Excel文件缺少必需的列。请确保包含：\n"
-                                f"• 日期列（posting_date / date / transaction_date）\n"
-                                f"• 商户列（merchant / name_customer / vendor）\n"
-                                f"• 金额列（amount / total_amount）\n"
-                                f"当前文件：{filename}"
+                            parse_error = i18n.t(
+                                "bill_upload.excel_missing_columns_detail",
+                                filename=filename,
                             )
-                        elif "解析失败" in excel_error or "parse" in excel_error.lower():
-                            parse_error = (
-                                f"无法读取Excel文件格式。可能原因：\n"
-                                f"• 文件已损坏或格式不正确\n"
-                                f"• 文件被加密或受保护\n"
-                                f"建议：尝试另存为新的.xlsx文件后再上传\n"
-                                f"当前文件：{filename}"
+                        elif (
+                            "解析失败" in excel_error or "parse" in excel_error.lower()
+                        ):
+                            parse_error = i18n.t(
+                                "bill_upload.excel_format_error_detail",
+                                filename=filename,
                             )
                         else:
-                            parse_error = (
-                                f"文件导入失败。请检查：\n"
-                                f"• 文件是否为有效的Excel (.xlsx/.xls) 或CSV格式\n"
-                                f"• 文件内容是否包含有效的交易数据\n"
-                                f"• 日期、商户、金额等字段是否完整\n"
-                                f"当前文件：{filename}\n"
-                                f"详细错误：{excel_error[:80]}"
+                            parse_error = i18n.t(
+                                "bill_upload.excel_generic_import_error",
+                                filename=filename,
+                                detail=excel_error[:80],
                             )
 
                 if parse_error or not structured_transactions:
@@ -625,6 +628,7 @@ def render() -> None:
                                         date=txn.date,
                                         merchant=txn.merchant,
                                         amount=f"{txn.amount:.2f}",
+                                        currency=i18n.currency_symbol,
                                     )
                                 )
                             if len(txn_list) > 3:
@@ -672,11 +676,11 @@ def render() -> None:
 
         with col1:
             st.markdown(f"### {i18n.t('bill_upload.fallback_option_1_title')}")
-            st.caption(i18n.t('bill_upload.fallback_option_1_desc'))
+            st.caption(i18n.t("bill_upload.fallback_option_1_desc"))
             if st.button(
-                i18n.t('bill_upload.fallback_option_1_title'),
+                i18n.t("bill_upload.fallback_option_1_title"),
                 key="fallback_reupload",
-                **responsive_width_kwargs(st.button)
+                **responsive_width_kwargs(st.button),
             ):
                 # Clear state and force re-render uploader
                 st.session_state["show_manual_entry"] = False
@@ -685,20 +689,20 @@ def render() -> None:
 
         with col2:
             st.markdown(f"### {i18n.t('bill_upload.fallback_option_2_title')}")
-            st.caption(i18n.t('bill_upload.fallback_option_2_desc'))
+            st.caption(i18n.t("bill_upload.fallback_option_2_desc"))
             if st.button(
-                i18n.t('bill_upload.fallback_option_2_title'),
+                i18n.t("bill_upload.fallback_option_2_title"),
                 key="fallback_manual",
                 type="primary",
-                **responsive_width_kwargs(st.button)
+                **responsive_width_kwargs(st.button),
             ):
                 st.session_state["show_manual_entry"] = True
                 st.rerun()
 
         with col3:
             st.markdown(f"### {i18n.t('bill_upload.fallback_option_3_title')}")
-            st.caption(i18n.t('bill_upload.fallback_option_3_desc'))
-            st.caption("📄 上传 .xlsx / .csv 文件")
+            st.caption(i18n.t("bill_upload.fallback_option_3_desc"))
+            st.caption(i18n.t("bill_upload.upload_excel_csv_hint"))
 
         if st.session_state.get("show_manual_entry"):
             st.markdown("---")

@@ -26,7 +26,7 @@ black . && ruff check .                      # 统一格式化+静态检查
 - 新文件须集成在 `__init__.py` 或相关工厂，避免破坏既有模块导出。
 
 ## 测试规范
-- 测试框架为 `pytest`，测试文件放在 `tests/`，命名规则 `test_<module>.py`，函数命名 `test_<行为>`，必要时通过 `pytest tests/test_ocr_service.py -v` 精准验证。
+- 测试框架为 `pytest`，测试文件放在 `tests/`，命名规则 `test_<module>.py`，函数命名 `test_<行为>`，必要时通过 `pytest tests/test_vision_ocr_service.py -v` 精准验证。
 - 重要分支需附带最小化集成测试（参考 `tests/test_integration.py`），并提供示例账单/环境变量。
 - 覆盖率目标：`modules/` 与 `services/` 关键路径 ≥80%；使用 `pytest --cov` 审查，并在 PR 描述中贴出结果。
 - 无 CI 情况下，提交前请截图或录屏关键页面，佐证手工验收已通过。
@@ -35,7 +35,7 @@ black . && ruff check .                      # 统一格式化+静态检查
 - Git 历史遵循 `type(scope): summary`（例：`feat(ux): improve sidebar caching`），使用祈使句，英文小写类型：`feat`、`fix`、`docs`、`chore` 等。
 - PR 必需内容：变更概述、相关 Issue/需求编号、测试证明（命令输出/截图）、风险与回滚方案。
 - 若涉及配置或密钥，提供 `.env.example` 变更说明，严禁提交真实密钥。
-- 合并前等待至少一名维护者复核，确保未触碰受限函数（如 `modules/analyzer.py` 中 `is_quality_keyword()`）。
+- 合并前等待至少一名维护者复核，确保未触碰受限目录（如 `anna_app/executas/`，其审核流程独立于本仓库）。
 
 ## 安全与配置提示
 - `.env` 通过 `cp .env.example .env` 初始化，仅填写代理 API Key、Base URL、模型名等敏感字段；不要上传真实凭据。

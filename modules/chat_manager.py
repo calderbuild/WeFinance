@@ -247,6 +247,7 @@ class ChatManager:
             self.add_message("assistant", heuristic_answer)
             if stream:
                 yield heuristic_answer
+                return
             else:
                 return heuristic_answer
 
@@ -255,6 +256,7 @@ class ChatManager:
             self.add_message("assistant", agent_answer)
             if stream:
                 yield agent_answer
+                return
             else:
                 return agent_answer
 
@@ -286,6 +288,7 @@ class ChatManager:
                         temperature=0.2,
                         messages=messages,
                         stream=True,
+                        timeout=15,
                     )
                     for chunk in completion_stream:
                         if chunk.choices and chunk.choices[0].delta.content:
@@ -303,6 +306,7 @@ class ChatManager:
                         model=self.model,
                         temperature=0.2,
                         messages=messages,
+                        timeout=15,
                     )
                     content = completion.choices[0].message.content
                     if not content:
@@ -326,6 +330,9 @@ class ChatManager:
         else:
             fallback = self.i18n.t("chat.fallback_error") + "\n" + summary
         self.add_message("assistant", fallback)
+        if stream:
+            yield fallback
+            return
         return fallback
 
     # ------------------------------------------------------------------ #
@@ -363,5 +370,6 @@ class ChatManager:
                 model=self.model,
                 api_key=self.api_key,
                 base_url=self.base_url,
+                locale=self.locale,
             )
         return self._lc_agent

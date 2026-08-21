@@ -33,6 +33,7 @@ def render() -> None:
     anomaly_report = compute_anomaly_report(
         transactions,
         whitelist_merchants=session_utils.get_trusted_merchants(),
+        locale=i18n.locale,
     )
 
     with st.expander(i18n.t("business_profile.trend_title"), expanded=True):
@@ -155,6 +156,7 @@ def render() -> None:
                         date=date_str,
                         merchant=merchant,
                         amount=f"{float(amount):,.2f}",
+                        currency=i18n.currency_symbol,
                     )
                 )
                 if reason:

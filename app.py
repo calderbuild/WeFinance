@@ -89,7 +89,7 @@ st.set_page_config(
     menu_items={
         "Get help": "mailto:team@wefinance.ai",
         "Report a bug": "https://github.com/wefinance/issues",
-        "About": "WeFinance Copilot — 让AI成为你的私人CFO。",
+        "About": get_i18n().t("app.menu_about"),
     },
 )
 
@@ -131,7 +131,6 @@ def get_comparison_table(locale: str):
 def _render_home() -> None:
     """Render the landing page with value proposition and card-based navigation."""
     i18n = get_i18n()
-    is_zh = i18n.locale == "zh_CN"
 
     # Modern Finance Luxury hero banner with glassmorphism
     st.markdown(
@@ -158,7 +157,7 @@ def _render_home() -> None:
                         border-radius: 50%;
                         animation: wf-pulse-glow 2s ease-in-out infinite;
                     "></span>
-                    {"AI驱动" if is_zh else "AI-Powered"}
+                    {i18n.t("app.badge_ai_powered")}
                 </div>
                 <h1 style="
                     font-family: {FONTS["heading"]};
@@ -194,7 +193,7 @@ def _render_home() -> None:
                         color: {COLORS["text_secondary"]};
                     ">
                         <span style="color: {COLORS["success"]};">●</span>
-                        {"100% OCR准确率" if is_zh else "100% OCR Accuracy"}
+                        {i18n.t("app.feature_ocr_accuracy")}
                     </div>
                     <div style="
                         display: flex;
@@ -204,7 +203,7 @@ def _render_home() -> None:
                         color: {COLORS["text_secondary"]};
                     ">
                         <span style="color: {COLORS["primary"]};">●</span>
-                        {"智能异常检测" if is_zh else "Smart Anomaly Detection"}
+                        {i18n.t("app.feature_anomaly_detection")}
                     </div>
                     <div style="
                         display: flex;
@@ -214,7 +213,7 @@ def _render_home() -> None:
                         color: {COLORS["text_secondary"]};
                     ">
                         <span style="color: {COLORS["accent"]};">●</span>
-                        {"可解释AI建议" if is_zh else "Explainable AI Advice"}
+                        {i18n.t("app.feature_explainable_ai")}
                     </div>
                 </div>
             </div>
@@ -239,7 +238,7 @@ def _render_home() -> None:
             reason = anomaly.get("reason", "")
             with st.container():
                 st.markdown(
-                    f"**{i18n.t('app.anomaly_info', date=date_str, merchant=merchant, amount=float(amount))}**"
+                    f"**{i18n.t('app.anomaly_info', date=date_str, merchant=merchant, amount=float(amount), currency=i18n.currency_symbol)}**"
                 )
                 if reason:
                     st.caption(reason)
@@ -294,14 +293,14 @@ def _render_home() -> None:
                 text-transform: uppercase;
                 letter-spacing: 0.05em;
                 margin-bottom: {SPACING["xs"]};
-            ">{"已记录交易" if is_zh else "Transactions"}</div>
+            ">{i18n.t("app.metric_transactions_label")}</div>
             <div style="
                 font-family: {FONTS["mono"]};
                 font-size: {FONTS["size_3xl"]};
                 font-weight: 600;
                 color: {COLORS["text_primary"]};
                 margin-bottom: {SPACING["sm"]};
-            ">{len(transactions)}<span style="font-size: {FONTS["size_lg"]}; color: {COLORS["text_secondary"]}; margin-left: 0.25rem;">{"笔" if is_zh else ""}</span></div>
+            ">{len(transactions)}<span style="font-size: {FONTS["size_lg"]}; color: {COLORS["text_secondary"]}; margin-left: 0.25rem;">{i18n.t("app.unit_suffix_transactions")}</span></div>
         </div>
         """,
             unsafe_allow_html=True,
@@ -328,7 +327,7 @@ def _render_home() -> None:
                 text-transform: uppercase;
                 letter-spacing: 0.05em;
                 margin-bottom: {SPACING["xs"]};
-            ">{"预算剩余" if is_zh else "Budget Remaining"}</div>
+            ">{i18n.t("app.metric_budget_label")}</div>
             <div style="
                 font-family: {FONTS["mono"]};
                 font-size: {FONTS["size_3xl"]};
@@ -339,7 +338,7 @@ def _render_home() -> None:
             <div style="
                 font-size: {FONTS["size_sm"]};
                 color: {COLORS["text_secondary"]};
-            ">{"已支出" if is_zh else "Spent"}: {i18n.currency_symbol}{total_spent:,.0f} ({usage_rate:.0f}%)</div>
+            ">{i18n.t("app.label_spent")}: {i18n.currency_symbol}{total_spent:,.0f} ({usage_rate:.0f}%)</div>
         </div>
         """,
             unsafe_allow_html=True,
@@ -362,14 +361,14 @@ def _render_home() -> None:
                 text-transform: uppercase;
                 letter-spacing: 0.05em;
                 margin-bottom: {SPACING["xs"]};
-            ">{"AI对话" if is_zh else "AI Chats"}</div>
+            ">{i18n.t("app.metric_chat_label")}</div>
             <div style="
                 font-family: {FONTS["mono"]};
                 font-size: {FONTS["size_3xl"]};
                 font-weight: 600;
                 color: {COLORS["primary"]};
                 margin-bottom: {SPACING["sm"]};
-            ">{len(chat_history)}<span style="font-size: {FONTS["size_lg"]}; color: {COLORS["text_secondary"]}; margin-left: 0.25rem;">{"次" if is_zh else ""}</span></div>
+            ">{len(chat_history)}<span style="font-size: {FONTS["size_lg"]}; color: {COLORS["text_secondary"]}; margin-left: 0.25rem;">{i18n.t("app.unit_suffix_chats")}</span></div>
         </div>
         """,
             unsafe_allow_html=True,
@@ -431,8 +430,10 @@ def _refresh_anomaly_state() -> None:
         )
         return
 
-    # Performance optimization: Only recompute if data changed
-    current_hash = hash(tuple((t.id, t.amount, t.date) for t in transactions))
+    # Performance optimization: Only recompute if data or locale changed
+    current_hash = hash(
+        (i18n.locale, tuple((t.id, t.amount, t.date) for t in transactions))
+    )
     last_hash = st.session_state.get("anomaly_last_hash")
 
     if current_hash == last_hash:
@@ -442,6 +443,7 @@ def _refresh_anomaly_state() -> None:
     report = compute_anomaly_report(
         transactions,
         whitelist_merchants=session_utils.get_trusted_merchants(),
+        locale=i18n.locale,
     )
     session_utils.sync_anomaly_state(report)
     st.session_state["anomaly_last_hash"] = current_hash
@@ -499,7 +501,7 @@ def main() -> None:
         current_locale = st.session_state.get("locale", "en_US")
         locale_display = locale_labels.get(current_locale, "English")
         selected_display = st.selectbox(
-            "🌐 Language" if current_locale == "en_US" else "🌐 语言",
+            i18n.t("app.language_selector_label"),
             options=list(locale_labels.values()),
             index=list(locale_labels.values()).index(locale_display),
         )
@@ -528,31 +530,25 @@ def main() -> None:
 
         # 紧凑进度显示
         st.markdown(
-            f"**{'📍 进度' if current_locale == 'zh_CN' else '📍 Progress'}** {steps_completed}/{total_steps}"
+            f"**{i18n.t('app.progress_label_short')}** {steps_completed}/{total_steps}"
         )
         st.progress(progress_percentage)
 
         # 智能建议下一步（精简）
         if not has_transactions:
-            next_step = (
-                "👉 上传账单" if current_locale == "zh_CN" else "👉 Upload bills"
-            )
+            next_step = i18n.t("app.next_step_upload")
             next_page_key = "bill_upload"
         elif not has_analysis:
-            next_step = (
-                "👉 查看分析" if current_locale == "zh_CN" else "👉 View insights"
-            )
+            next_step = i18n.t("app.next_step_insights")
             next_page_key = "spending_insights"
         elif not has_chat_history:
-            next_step = "👉 AI咨询" if current_locale == "zh_CN" else "👉 Chat with AI"
+            next_step = i18n.t("app.next_step_chat")
             next_page_key = "advisor_chat"
         elif not has_recommendations:
-            next_step = (
-                "👉 投资建议" if current_locale == "zh_CN" else "👉 Invest advice"
-            )
+            next_step = i18n.t("app.next_step_invest")
             next_page_key = "investment_recs"
         else:
-            next_step = "✅ 已完成" if current_locale == "zh_CN" else "✅ All done"
+            next_step = i18n.t("app.next_step_done")
             next_page_key = None
 
         if next_page_key and st.button(
@@ -569,15 +565,14 @@ def main() -> None:
         # 精简导航（移除首页，保留4个核心步骤 + 1个补充视角）
         nav_labels = {
             "bill_upload": f"{'✅' if has_transactions else '1️⃣'} "
-            + ("账单上传" if current_locale == "zh_CN" else "Upload"),
+            + i18n.t("app.nav_short_upload"),
             "spending_insights": f"{'✅' if has_analysis else '2️⃣'} "
-            + ("消费分析" if current_locale == "zh_CN" else "Analysis"),
-            "business_profile": "📈 "
-            + ("经营画像" if current_locale == "zh_CN" else "Business View"),
+            + i18n.t("app.nav_short_analysis"),
+            "business_profile": "📈 " + i18n.t("app.nav_short_business"),
             "advisor_chat": f"{'✅' if has_chat_history else '3️⃣'} "
-            + ("AI顾问" if current_locale == "zh_CN" else "AI Chat"),
+            + i18n.t("app.nav_short_chat"),
             "investment_recs": f"{'✅' if has_recommendations else '4️⃣'} "
-            + ("投资建议" if current_locale == "zh_CN" else "Invest"),
+            + i18n.t("app.nav_short_invest"),
         }
         radio_options = list(nav_labels.values())
         selected_page = st.session_state.get("selected_page", "home")
@@ -585,7 +580,7 @@ def main() -> None:
             selected_page = "bill_upload"  # 默认第一步
         default_index = radio_options.index(nav_labels[selected_page])
         selection_label = st.radio(
-            "📍 " + ("导航" if current_locale == "zh_CN" else "Nav"),
+            "📍 " + i18n.t("app.nav_label_short"),
             radio_options,
             index=default_index,
             label_visibility="collapsed",  # 隐藏标签，进一步节省空间
@@ -599,7 +594,7 @@ def main() -> None:
         st.markdown("---")
         current_budget = session_utils.get_monthly_budget()
         new_budget = st.number_input(
-            "💰 " + ("月度预算" if current_locale == "zh_CN" else "Budget"),
+            "💰 " + i18n.t("app.budget_label_short"),
             min_value=0.0,
             max_value=1000000.0,
             value=float(current_budget),
@@ -616,8 +611,8 @@ def main() -> None:
 
         with col1:
             if st.button(
-                "📥" if current_locale == "en_US" else "📥",
-                help="导出数据" if current_locale == "zh_CN" else "Export",
+                "📥",
+                help=i18n.t("app.export_help_short"),
                 key="export_data_btn",
                 **responsive_width_kwargs(st.button),
             ):
@@ -644,7 +639,7 @@ def main() -> None:
         with col2:
             if st.button(
                 "🗑️",
-                help="清除数据" if current_locale == "zh_CN" else "Clear",
+                help=i18n.t("app.clear_help_short"),
                 key="clear_data_btn",
                 **responsive_width_kwargs(st.button),
             ):
@@ -661,9 +656,7 @@ def main() -> None:
                     st.session_state["confirm_clear"] = True
 
         if st.session_state.get("confirm_clear"):
-            st.caption(
-                "⚠️ " + ("再次点击确认" if current_locale == "zh_CN" else "Click again")
-            )
+            st.caption("⚠️ " + i18n.t("app.confirm_clear_short"))
 
     render = PAGES.get(selection)
     if render is None:
@@ -672,11 +665,7 @@ def main() -> None:
 
     try:
         # Add loading indicator for better UX
-        with st.spinner(
-            "🔄 Loading..."
-            if st.session_state.get("locale") == "en_US"
-            else "🔄 加载中..."
-        ):
+        with st.spinner(i18n.t("app.loading_spinner")):
             render()
     except Exception as exc:  # pylint: disable=broad-except
         logger.exception("页面渲染失败：%s", exc)

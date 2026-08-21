@@ -14,6 +14,7 @@ from openai import OpenAI
 
 from models.entities import SpendingInsight, Transaction
 from utils.error_handling import safe_call
+from utils.i18n import I18n
 
 logger = logging.getLogger(__name__)
 
@@ -48,15 +49,15 @@ def _generate_personalized_actions_llm(
 
     # 根据语言选择提示词
     if locale == "en_US":
-        prompt = f"""You are a professional financial advisor. The user's spending in "{category}" category increased by {delta_pct:.1f}% (extra ¥{delta_amount:.0f}) compared to last month.
+        prompt = f"""You are a professional financial advisor. The user's spending in "{category}" category increased by {delta_pct:.1f}% (extra ${delta_amount:.0f}) compared to last month.
 
 User financial background:
-- Monthly total spending: ¥{context.get("monthly_total", 0):.2f}
+- Monthly total spending: ${context.get("monthly_total", 0):.2f}
 - This category ratio: {context.get("category_ratio", 0):.1f}%
 
 Generate 2-3 actionable saving tips:
 1. Specific and feasible (not generic "reduce XX")
-2. Quantify potential savings (estimate based on ¥{delta_amount}, max 80%)
+2. Quantify potential savings (estimate based on ${delta_amount}, max 80%)
 3. Consider user's quality of life
 
 Return JSON format:
@@ -138,7 +139,7 @@ Requirements:
             if action_text and save_amount > 0:
                 if locale == "en_US":
                     actions.append(
-                        f"{action_text}, potential save ¥{save_amount:.0f}/month"
+                        f"{action_text}, potential save ${save_amount:.0f}/month"
                     )
                 else:
                     actions.append(f"{action_text}，预计月省¥{save_amount:.0f}")
@@ -385,6 +386,7 @@ def forecast_spending_trend(
 def _compute_zscore_anomalies(
     transactions: Sequence[Transaction],
     threshold: float,
+    locale: str = "zh_CN",
 ) -> List[dict]:
     """Internal helper computing z-score anomalies for a given threshold."""
     df = _to_dataframe(transactions)
@@ -399,6 +401,9 @@ def _compute_zscore_anomalies(
 
     df["z_score"] = (amounts - mean) / std
     anomalies = df[np.abs(df["z_score"]) >= threshold]
+    reason_template = (
+        "{sigma:.1f}σ above average" if locale == "en_US" else "高于平均值 {sigma:.1f}σ"
+    )
     results: List[dict] = []
     for _, row in anomalies.iterrows():
         z_val = float(row["z_score"])
@@ -410,7 +415,7 @@ def _compute_zscore_anomalies(
                 "merchant": row["merchant"],
                 "amount": float(row["amount"]),
                 "z_score": z_val,
-                "reason": f"高于平均值 {abs(z_val):.1f}σ",
+                "reason": reason_template.format(sigma=abs(z_val)),
                 "status": "new",
             }
         )
@@ -422,6 +427,7 @@ def compute_anomaly_report(
     *,
     base_threshold: float = 2.5,
     whitelist_merchants: Iterable[str] | None = None,
+    locale: str = "zh_CN",
 ) -> Dict[str, object]:
     """
     Generate anomaly detection results along with contextual metadata.
@@ -459,13 +465,15 @@ def compute_anomaly_report(
         report["sensitivity"] = "reduced"
         report["message"] = "spending.message_reduced_sensitivity"
 
-    anomalies = _compute_zscore_anomalies(filtered, applied_threshold)
+    anomalies = _compute_zscore_anomalies(filtered, applied_threshold, locale=locale)
 
     if not anomalies and sample_size >= 10:
         for candidate in (2.0, 1.5):
             if candidate >= applied_threshold:
                 continue
-            candidate_anomalies = _compute_zscore_anomalies(filtered, candidate)
+            candidate_anomalies = _compute_zscore_anomalies(
+                filtered, candidate, locale=locale
+            )
             if candidate_anomalies:
                 anomalies = candidate_anomalies
                 applied_threshold = candidate
@@ -488,12 +496,14 @@ def detect_anomalies(
     *,
     threshold: float = 2.5,
     whitelist_merchants: Iterable[str] | None = None,
+    locale: str = "zh_CN",
 ) -> List[dict]:
     """Backward compatible wrapper returning仅异常列表."""
     report = compute_anomaly_report(
         transactions,
         base_threshold=threshold,
         whitelist_merchants=whitelist_merchants,
+        locale=locale,
     )
     return list(report["items"])
 
@@ -563,49 +573,95 @@ def _month_over_month_insight(
     )
 
     # Fallback到硬编码规则（LLM失败时）
+    currency_symbol = "$" if locale == "en_US" else "¥"
     if not actions:
         logger.info(f"LLM建议生成失败，使用fallback规则（{category}类别）")
-        if category == "餐饮":
-            monthly_save_1 = delta_amount * 0.6  # 60% can be saved by meal prep
-            monthly_save_2 = delta_amount * 0.3  # 30% by using delivery discounts
-            actions = [
-                f"每周自备午餐2-3次，月省约¥{monthly_save_1:.0f}",
-                f"减少外卖订单，使用堂食优惠，月省约¥{monthly_save_2:.0f}",
-            ]
-        elif category == "交通":
-            monthly_save = delta_amount * 0.4  # 40% by using monthly pass
-            actions = [
-                f"办理月卡或交通套餐，月省约¥{monthly_save:.0f}",
-                "优化出行路线，合并近距离行程",
-            ]
-        elif category == "购物":
-            monthly_save = delta_amount * 0.5  # 50% by reducing impulse purchases
-            actions = [
-                f"设置购物清单，减少冲动消费，月省约¥{monthly_save:.0f}",
-                "等待促销活动，避免高峰期购买",
-            ]
-        elif category == "娱乐":
-            monthly_save = delta_amount * 0.45  # 45% by using memberships
-            actions = [
-                f"使用年度会员或套餐优惠，月省约¥{monthly_save:.0f}",
-                "选择性价比更高的娱乐活动",
-            ]
+        if locale == "en_US":
+            if category == "餐饮":
+                monthly_save_1 = delta_amount * 0.6  # 60% can be saved by meal prep
+                monthly_save_2 = delta_amount * 0.3  # 30% by using delivery discounts
+                actions = [
+                    f"Prep lunch 2-3x/week, save ~${monthly_save_1:.0f}/month",
+                    f"Cut delivery orders, use dine-in deals, save ~${monthly_save_2:.0f}/month",
+                ]
+            elif category == "交通":
+                monthly_save = delta_amount * 0.4  # 40% by using monthly pass
+                actions = [
+                    f"Get a monthly transit pass, save ~${monthly_save:.0f}/month",
+                    "Optimize routes and combine nearby trips",
+                ]
+            elif category == "购物":
+                monthly_save = delta_amount * 0.5  # 50% by reducing impulse purchases
+                actions = [
+                    f"Use a shopping list to cut impulse buys, save ~${monthly_save:.0f}/month",
+                    "Wait for sales and avoid peak-price windows",
+                ]
+            elif category == "娱乐":
+                monthly_save = delta_amount * 0.45  # 45% by using memberships
+                actions = [
+                    f"Switch to annual memberships or bundles, save ~${monthly_save:.0f}/month",
+                    "Pick better value-for-money entertainment options",
+                ]
+            else:
+                actions = [
+                    "Review the detailed breakdown to spot savings opportunities",
+                    "Set a monthly budget for this category to control growth",
+                ]
         else:
-            # Generic recommendations for other categories
-            actions = [
-                "分析具体支出明细，识别可优化项目",
-                "设置该类别月度预算，控制增长趋势",
-            ]
+            if category == "餐饮":
+                monthly_save_1 = delta_amount * 0.6  # 60% can be saved by meal prep
+                monthly_save_2 = delta_amount * 0.3  # 30% by using delivery discounts
+                actions = [
+                    f"每周自备午餐2-3次，月省约¥{monthly_save_1:.0f}",
+                    f"减少外卖订单，使用堂食优惠，月省约¥{monthly_save_2:.0f}",
+                ]
+            elif category == "交通":
+                monthly_save = delta_amount * 0.4  # 40% by using monthly pass
+                actions = [
+                    f"办理月卡或交通套餐，月省约¥{monthly_save:.0f}",
+                    "优化出行路线，合并近距离行程",
+                ]
+            elif category == "购物":
+                monthly_save = delta_amount * 0.5  # 50% by reducing impulse purchases
+                actions = [
+                    f"设置购物清单，减少冲动消费，月省约¥{monthly_save:.0f}",
+                    "等待促销活动，避免高峰期购买",
+                ]
+            elif category == "娱乐":
+                monthly_save = delta_amount * 0.45  # 45% by using memberships
+                actions = [
+                    f"使用年度会员或套餐优惠，月省约¥{monthly_save:.0f}",
+                    "选择性价比更高的娱乐活动",
+                ]
+            else:
+                # Generic recommendations for other categories
+                actions = [
+                    "分析具体支出明细，识别可优化项目",
+                    "设置该类别月度预算，控制增长趋势",
+                ]
+
+    display_category = I18n(locale).translate_category(category)
+    if locale == "en_US":
+        title = "Category Spending Change"
+        detail = (
+            f'Your "{display_category}" spending rose {delta_pct:.1f}% vs last month '
+            f"(+{currency_symbol}{delta_amount:.0f})"
+        )
+    else:
+        title = "分类支出变化"
+        detail = f"您本月在「{display_category}」上的支出比上月增加了 {delta_pct:.1f}%（多花{currency_symbol}{delta_amount:.0f}）"
 
     return SpendingInsight(
-        title="分类支出变化",
-        detail=f"您本月在「{category}」上的支出比上月增加了 {delta_pct:.1f}%（多花¥{delta_amount:.0f}）",
+        title=title,
+        detail=detail,
         actions=actions,
         delta=delta_pct,
     )
 
 
-def _recent_average_insight(df: pd.DataFrame, days: int = 3) -> SpendingInsight | None:
+def _recent_average_insight(
+    df: pd.DataFrame, days: int = 3, locale: str = "zh_CN"
+) -> SpendingInsight | None:
     """Generate insight on recent rolling average spending."""
     if df.empty:
         return None
@@ -619,29 +675,55 @@ def _recent_average_insight(df: pd.DataFrame, days: int = 3) -> SpendingInsight 
 
     avg = recent["amount"].mean()
     monthly_projected = avg * 30
+    currency_symbol = "$" if locale == "en_US" else "¥"
 
     # Generate actionable recommendations based on daily average
     actions = []
-    if avg > 200:  # High daily spending
-        potential_save = avg * 0.25 * 30  # 25% reduction
-        actions = [
-            f"设置每日消费目标¥{avg * 0.75:.0f}，月省¥{potential_save:.0f}",
-            "使用消费记录App，实时追踪每日支出",
-        ]
-    elif avg > 100:  # Moderate daily spending
-        actions = [
-            "继续保持当前消费水平，关注异常大额支出",
-            "设置每周预算提醒，避免后期超支",
-        ]
-    else:  # Low daily spending
-        actions = [
-            "消费控制良好，可考虑将结余用于投资理财",
-            "建立应急基金，提升财务安全性",
-        ]
+    if locale == "en_US":
+        if avg > 200:  # High daily spending
+            potential_save = avg * 0.25 * 30  # 25% reduction
+            actions = [
+                f"Set a daily spending target of ${avg * 0.75:.0f}, save ${potential_save:.0f}/month",
+                "Use a spend-tracking app to monitor daily spending in real time",
+            ]
+        elif avg > 100:  # Moderate daily spending
+            actions = [
+                "Keep up the current spending level, watch for unusual large charges",
+                "Set a weekly budget reminder to avoid overspending later",
+            ]
+        else:  # Low daily spending
+            actions = [
+                "Spending is well controlled, consider investing the surplus",
+                "Build an emergency fund to improve financial resilience",
+            ]
+        title = "Recent Spending Trend"
+        detail = (
+            f"Average daily spending over the last {days} days is about "
+            f"{currency_symbol}{avg:.2f} (projects to ~{currency_symbol}{monthly_projected:.0f}/month)"
+        )
+    else:
+        if avg > 200:  # High daily spending
+            potential_save = avg * 0.25 * 30  # 25% reduction
+            actions = [
+                f"设置每日消费目标¥{avg * 0.75:.0f}，月省¥{potential_save:.0f}",
+                "使用消费记录App，实时追踪每日支出",
+            ]
+        elif avg > 100:  # Moderate daily spending
+            actions = [
+                "继续保持当前消费水平，关注异常大额支出",
+                "设置每周预算提醒，避免后期超支",
+            ]
+        else:  # Low daily spending
+            actions = [
+                "消费控制良好，可考虑将结余用于投资理财",
+                "建立应急基金，提升财务安全性",
+            ]
+        title = "近期开销趋势"
+        detail = f"最近 {days} 天的平均日消费约为 ¥{avg:.2f}（按此速度月消费约¥{monthly_projected:.0f}）"
 
     return SpendingInsight(
-        title="近期开销趋势",
-        detail=f"最近 {days} 天的平均日消费约为 ¥{avg:.2f}（按此速度月消费约¥{monthly_projected:.0f}）",
+        title=title,
+        detail=detail,
         actions=actions,
     )
 
@@ -670,28 +752,55 @@ def generate_insights(
         )
 
         # Generate actionable recommendations based on top category
+        currency_symbol = "$" if locale == "en_US" else "¥"
         actions = []
-        if concentration_pct > 50:  # High concentration
-            potential_save = top_amount * 0.2  # 20% reduction potential
-            actions = [
-                f"该类别占比{concentration_pct:.0f}%，考虑优化可月省¥{potential_save:.0f}",
-                "制定该类别专项预算，分散消费风险",
-            ]
-        elif concentration_pct > 30:  # Moderate concentration
-            actions = [
-                f"该类别占比{concentration_pct:.0f}%，属于合理范围",
-                "可关注其他类别支出，保持平衡",
-            ]
-        else:  # Low concentration - diversified spending
-            actions = [
-                "消费分布均衡，财务结构健康",
-                "继续保持多元化消费，避免单一类别过度集中",
-            ]
+        if locale == "en_US":
+            if concentration_pct > 50:  # High concentration
+                potential_save = top_amount * 0.2  # 20% reduction potential
+                actions = [
+                    f"This category is {concentration_pct:.0f}% of spending; optimizing could save ${potential_save:.0f}/month",
+                    "Set a dedicated budget for this category to spread out risk",
+                ]
+            elif concentration_pct > 30:  # Moderate concentration
+                actions = [
+                    f"This category is {concentration_pct:.0f}% of spending, within a reasonable range",
+                    "Keep an eye on other categories to stay balanced",
+                ]
+            else:  # Low concentration - diversified spending
+                actions = [
+                    "Spending is well distributed and financially healthy",
+                    "Keep diversifying spending to avoid over-concentration",
+                ]
+            title = "Spending Concentration"
+            display_category = I18n(locale).translate_category(top_category)
+            detail = (
+                f'"{display_category}" is your top spending category at about '
+                f"{currency_symbol}{top_amount:.2f} ({concentration_pct:.0f}% of total spending)"
+            )
+        else:
+            if concentration_pct > 50:  # High concentration
+                potential_save = top_amount * 0.2  # 20% reduction potential
+                actions = [
+                    f"该类别占比{concentration_pct:.0f}%，考虑优化可月省¥{potential_save:.0f}",
+                    "制定该类别专项预算，分散消费风险",
+                ]
+            elif concentration_pct > 30:  # Moderate concentration
+                actions = [
+                    f"该类别占比{concentration_pct:.0f}%，属于合理范围",
+                    "可关注其他类别支出，保持平衡",
+                ]
+            else:  # Low concentration - diversified spending
+                actions = [
+                    "消费分布均衡，财务结构健康",
+                    "继续保持多元化消费，避免单一类别过度集中",
+                ]
+            title = "消费集中度提示"
+            detail = f"目前「{top_category}」类别的支出最高，约为 ¥{top_amount:.2f}（占总支出{concentration_pct:.0f}%）"
 
         insights.append(
             SpendingInsight(
-                title="消费集中度提示",
-                detail=f"目前「{top_category}」类别的支出最高，约为 ¥{top_amount:.2f}（占总支出{concentration_pct:.0f}%）",
+                title=title,
+                detail=detail,
                 actions=actions,
             )
         )
@@ -700,7 +809,7 @@ def generate_insights(
     if mom_insight:
         insights.append(mom_insight)
 
-    recent_insight = _recent_average_insight(df)
+    recent_insight = _recent_average_insight(df, locale=locale)
     if recent_insight:
         insights.append(recent_insight)
 

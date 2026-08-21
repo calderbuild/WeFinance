@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import logging
 from pathlib import Path
-from typing import Any, BinaryIO, Iterable, List, Optional
+from typing import BinaryIO, Iterable, List
 
 from models.entities import OCRParseResult, Transaction
 from services.vision_ocr_service import VisionOCRService
@@ -104,7 +104,6 @@ class OCRService:
         self,
         use_angle_class: bool = True,
         lang: str = "ch",
-        structuring_service: Optional[Any] = None,
     ) -> None:
         """
         初始化OCR服务
@@ -112,7 +111,6 @@ class OCRService:
         Args:
             use_angle_class: 保留参数用于向后兼容，但不再使用
             lang: 保留参数用于向后兼容，但不再使用
-            structuring_service: 不再需要，Vision LLM直接输出结构化数据
         """
         # 使用Vision LLM服务（模型名读取 OPENAI_MODEL 环境变量，缺省回退 gpt-4o）
         self._vision_ocr = VisionOCRService()
