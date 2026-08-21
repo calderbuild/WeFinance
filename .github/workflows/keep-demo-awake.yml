@@ -1,0 +1,27 @@
+name: Keep demo awake
+
+# Streamlit Community Cloud sleeps an app after roughly 12 hours without a
+# viewer, and waking it needs the owner's session, so a sleeping app cannot
+# recover on its own. Opening a real viewer session every 6 hours keeps a
+# comfortable margin under that threshold.
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: keep-demo-awake
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install the websocket client
+        run: pip install "websockets>=13"
+      - name: Open a viewer session on the demo
+        run: python scripts/keep_demo_awake.py
