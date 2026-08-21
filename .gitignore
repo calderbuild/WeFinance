@@ -93,3 +93,10 @@ docs/handoffs/
 # Reference PDFs dropped into docs/plans while drafting (hackathon guides etc).
 # hackathon/goai-2026-manual.pdf is tracked deliberately and is unaffected.
 docs/plans/*.pdf
+
+# Anna's Marketplace review documents. These are a third party's QA output
+# sent to us privately, and this repo is public, so they stay local.
+docs/anna/
+
+# Ruff writes these wherever it is invoked.
+.ruff_cache/
