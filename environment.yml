@@ -1,67 +1,29 @@
 name: wefinance
 channels:
+  # conda-forge only: the `defaults` channel carries Anaconda's commercial
+  # Terms of Service and every package here is available on conda-forge.
   - conda-forge
-  - defaults
+  - nodefaults
 dependencies:
   # ============================================================
-  # 核心环境
+  # Interpreter only. Everything the app imports at runtime is
+  # declared in requirements.txt and installed via pip below, so
+  # there is exactly one source of truth for runtime versions.
+  # Streamlit Cloud installs both files; duplicating pins here
+  # meant conda's exact pins silently overrode requirements.txt
+  # and production ran a different dependency set than CI.
   # ============================================================
   - python=3.10
   - pip
 
   # ============================================================
-  # 数据科学核心库（conda优先）
-  # ============================================================
-  - pandas=2.0.*
-  - numpy>=1.26
-  - scipy>=1.10.0
-
-  # ============================================================
-  # 图像处理
-  # ============================================================
-  - pillow=10.*
-  - opencv=4.8.*
-
-  # ============================================================
-  # 可视化
-  # ============================================================
-  - plotly=5.18.*
-  - matplotlib>=3.7.0
-
-  # ============================================================
-  # 开发和测试工具
+  # Dev-only tooling (not needed to run the app, so deliberately
+  # kept out of requirements.txt).
   # ============================================================
   - pytest=7.4.*
   - pytest-cov=4.1.*
   - black>=23.0.0
   - ruff>=0.1.0
 
-  # ============================================================
-  # 实用工具
-  # ============================================================
-  - python-dotenv=1.0.*
-  - requests>=2.31.0
-  - tqdm>=4.66.0
-
-  # ============================================================
-  # Jupyter（可选，用于数据探索）
-  # ============================================================
-  # - jupyter>=1.0.0
-  # - ipykernel>=6.25.0
-
-  # ============================================================
-  # 只能通过pip安装的包
-  # ============================================================
   - pip:
-    # Web框架
-    - streamlit==1.38.0
-
-    # LLM和AI框架（conda版本更新慢）
-    - openai>=1.6.1
-    - langchain==0.2.10
-    - langchain-openai==0.1.7
-
-    # 其余仅pip可装的依赖（与requirements.txt保持一致）
-    - pydantic>=2.0
-    - pypdfium2>=4.30.0
-    - openpyxl>=3.0
+    - -r requirements.txt
