@@ -8,7 +8,15 @@ from datetime import date, timedelta
 import pytest
 
 from models.entities import Transaction
-from services.langchain_agent import LangChainFinanceAgent
+
+# services.langchain_agent imports the legacy LangChain agent API, which only
+# exists on langchain <1.0. requirements.txt pins that range, but if a resolver
+# ever drags in an incompatible version we want a visible skip here rather than
+# a collection error that takes the whole suite down with it.
+LangChainFinanceAgent = pytest.importorskip(
+    "services.langchain_agent",
+    reason="LangChain agent API unavailable (incompatible langchain version)",
+).LangChainFinanceAgent
 
 
 def _txn(id_, days_ago, category, amount):
