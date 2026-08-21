@@ -6,7 +6,6 @@ from typing import List
 
 import streamlit as st
 
-from models.entities import Transaction
 from modules.chat_manager import ChatManager
 from utils.session import (
     build_chat_cache_key,
@@ -152,12 +151,21 @@ def render() -> None:
         response_placeholder = st.empty()
         full_response = ""
 
-        for chunk in chat_manager.generate_response(user_prompt, stream=True):
-            full_response += chunk
-            response_placeholder.markdown(full_response + "▌")  # 添加闪烁光标效果
-
-        # 显示最终结果
-        response_placeholder.markdown(full_response)
+        try:
+            for chunk in chat_manager.generate_response(user_prompt, stream=True):
+                full_response += chunk
+                response_placeholder.markdown(full_response + "▌")  # 添加闪烁光标效果
+        except Exception as exc:  # pylint: disable=broad-except
+            if full_response:
+                # 保留已经流式输出的部分内容，仅追加错误提示
+                response_placeholder.markdown(full_response)
+                st.caption(f"⚠️ {i18n.t('errors.llm_fail', error=str(exc))}")
+            else:
+                full_response = i18n.t("chat.fallback_error_detail", error=str(exc))
+                response_placeholder.markdown(full_response)
+        else:
+            # 显示最终结果
+            response_placeholder.markdown(full_response)
 
         # 缓存完整回复
         cache[cache_key] = full_response

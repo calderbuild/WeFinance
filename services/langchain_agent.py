@@ -28,12 +28,14 @@ class LangChainFinanceAgent:
         model: str = "gpt-4o-mini",
         api_key: str | None = None,
         base_url: str | None = None,
+        locale: str = "en_US",
     ) -> None:
         self.transactions = self._normalize_transactions(transactions)
         self.monthly_budget = monthly_budget
         self.model = model
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
+        self.currency_symbol = "¥" if locale == "zh_CN" else "$"
 
         if not self.api_key:
             raise RuntimeError(
@@ -82,8 +84,9 @@ class LangChainFinanceAgent:
             return "You haven't set a monthly budget yet. Please set one first."
         remaining = max(0.0, self.monthly_budget - spent)
         return (
-            f"Monthly budget: ¥{self.monthly_budget:.2f}; spent: ¥{spent:.2f}; "
-            f"remaining: ¥{remaining:.2f}."
+            f"Monthly budget: {self.currency_symbol}{self.monthly_budget:.2f}; "
+            f"spent: {self.currency_symbol}{spent:.2f}; "
+            f"remaining: {self.currency_symbol}{remaining:.2f}."
         )
 
     def _tool_query_spending(self, _: str) -> str:
@@ -91,7 +94,7 @@ class LangChainFinanceAgent:
         if not totals:
             return "No spending data recorded yet."
         lines = [
-            f"{category}: ¥{amount:.2f}"
+            f"{category}: {self.currency_symbol}{amount:.2f}"
             for category, amount in sorted(
                 totals.items(), key=lambda item: item[1], reverse=True
             )
@@ -106,7 +109,7 @@ class LangChainFinanceAgent:
         amount = totals.get(category)
         if amount is None:
             return f"No spending records found for category '{category}'."
-        return f"Estimated spending for '{category}' is ¥{amount:.2f}."
+        return f"Estimated spending for '{category}' is {self.currency_symbol}{amount:.2f}."
 
     def _setup_agent(self) -> None:
         llm = ChatOpenAI(

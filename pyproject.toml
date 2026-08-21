@@ -1,0 +1,23 @@
+# Pinned lint configuration.
+#
+# Without an explicit config, ruff's selected rule set drifts between
+# versions, so local and CI can disagree about what "clean" means. This
+# pins a deliberately conservative set: correctness rules (pyflakes +
+# the pycodestyle errors that catch real mistakes) plus import sorting.
+#
+# Stylistic modernization rules (UP*, typing.List -> list and friends)
+# are intentionally left off for now: they flag ~200 sites across the
+# codebase, which is a mechanical sweep worth doing on its own rather
+# than smuggling into an unrelated change.
+[tool.ruff]
+target-version = "py310"
+extend-exclude = ["anna_app/executas/*/dist", "artifacts"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Standalone scripts insert the repo root into sys.path before importing
+# first-party modules, so their imports legitimately are not at the top.
+"scripts/*" = ["E402"]
+"tools/*" = ["E402"]

@@ -5,8 +5,7 @@ from __future__ import annotations
 import functools
 import logging
 import signal
-from typing import Any, Callable, TypeVar
-from typing import ParamSpec
+from typing import Any, Callable, ParamSpec, TypeVar
 
 logger = logging.getLogger(__name__)
 
