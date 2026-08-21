@@ -10,6 +10,7 @@ from typing import Callable
 import streamlit as st
 
 from models.entities import Transaction
+from modules.analysis import compute_anomaly_report
 from pages import (
     advisor_chat,
     bill_upload,
@@ -17,24 +18,21 @@ from pages import (
     investment_recs,
     spending_insights,
 )
-from modules.analysis import compute_anomaly_report
 from utils import session as session_utils
+from utils.design_system import (
+    COLORS,
+    FONTS,
+    RADIUS,
+    SPACING,
+    inject_global_styles,
+)
 from utils.session import (
     get_i18n,
     init_session_state,
-    reset_session_state,
     switch_locale,
 )
 from utils.storage import clear_all_storage, load_from_storage
 from utils.ui_components import responsive_width_kwargs
-from utils.design_system import (
-    inject_global_styles,
-    render_hero_banner,
-    COLORS,
-    FONTS,
-    SPACING,
-    RADIUS,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +99,7 @@ inject_global_styles()
 def get_comparison_table(locale: str):
     """Cache comparison table data to avoid recreation on each render."""
     import pandas as pd
+
     from utils.i18n import I18n
 
     # 直接创建临时I18n实例用于翻译（函数已被缓存，仅执行一次）

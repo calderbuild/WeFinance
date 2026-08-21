@@ -605,7 +605,6 @@ Requirements:
         top_category_share = next(iter(breakdown.values())) if breakdown else 0
 
         txn_list = list(transactions)
-        total_amount = sum(t.amount for t in txn_list)
 
         if locale == "en_US":
             system_prompt = """You are a professional financial advisor. Generate 3-5 personalized risk assessment questions based on user's real spending data."""
@@ -774,7 +773,6 @@ Requirements:
         monthly_avg = float(metrics.get("monthly_average", 0.0) or 0.0)
         volatility = float(metrics.get("spending_volatility", 0.0) or 0.0)
         investable = float(metrics.get("investable_amount", 0.0) or 0.0)
-        breakdown = metrics.get("category_breakdown", {}) or {}
         allocation = self.generate_allocation(risk_profile)
 
         # 交易数据统计

@@ -6,7 +6,6 @@ from typing import List
 
 import streamlit as st
 
-from models.entities import Transaction
 from modules.chat_manager import ChatManager
 from utils.session import (
     build_chat_cache_key,

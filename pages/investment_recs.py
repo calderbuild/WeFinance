@@ -164,11 +164,13 @@ def _generate_guidance_text(
     investable: float,
 ) -> Tuple[str, str]:
     """生成引导文案（LLM动态生成）"""
-    from utils.error_handling import UserFacingError, safe_call
-    from openai import OpenAI
-    from utils.i18n import I18n
-    import os
     import json
+    import os
+
+    from openai import OpenAI
+
+    from utils.error_handling import UserFacingError, safe_call
+    from utils.i18n import I18n
 
     currency_symbol = I18n(locale).currency_symbol
 

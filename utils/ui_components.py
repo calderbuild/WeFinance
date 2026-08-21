@@ -13,16 +13,15 @@ from typing import Any, Callable, Dict, List
 import streamlit as st
 
 from models.entities import Transaction
-from utils.session import get_i18n, get_monthly_budget
 from utils.design_system import (
     COLORS,
     FONTS,
-    SPACING,
-    SHADOWS,
     RADIUS,
+    SPACING,
     render_progress_ring,
     render_status_badge,
 )
+from utils.session import get_i18n, get_monthly_budget
 
 
 def responsive_width_kwargs(
@@ -230,7 +229,6 @@ def render_transaction_card(
         on_delete_key: 删除按钮的session_state key
     """
     i18n = get_i18n()
-    is_zh = i18n.locale == "zh_CN"
 
     # 类别图标映射
     category_icons = {
@@ -362,13 +360,12 @@ def render_anomaly_alert(
         severity: 严重程度 ("warning", "danger")
     """
     i18n = get_i18n()
-    is_zh = i18n.locale == "zh_CN"
 
     color = COLORS["warning"] if severity == "warning" else COLORS["error"]
     bg_color = (
-        f"rgba(245, 158, 11, 0.1)"
+        "rgba(245, 158, 11, 0.1)"
         if severity == "warning"
-        else f"rgba(239, 68, 68, 0.1)"
+        else "rgba(239, 68, 68, 0.1)"
     )
     icon = "⚠️" if severity == "warning" else "🚨"
 

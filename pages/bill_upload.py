@@ -601,7 +601,7 @@ def render() -> None:
                         i18n.t("common.unnamed_file"),
                     )
                     st.write(
-                        f"📄 "
+                        "📄 "
                         + i18n.t(
                             "bill_upload.processing_file",
                             current=idx,

@@ -11,7 +11,6 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
-
 SLIDES = [
     {
         "title": "WeFinance 智能记账与经营流水助手",

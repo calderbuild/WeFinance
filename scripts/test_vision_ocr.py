@@ -10,14 +10,17 @@ import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
 
-
 # 把仓库根目录加入 sys.path，方便直接 import services.*
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from services.vision_ocr_service import VisionOCRService  # noqa: E402  pylint: disable=wrong-import-position
-from utils.error_handling import UserFacingError  # noqa: E402  pylint: disable=wrong-import-position
+from services.vision_ocr_service import (
+    VisionOCRService,  # noqa: E402  pylint: disable=wrong-import-position
+)
+from utils.error_handling import (
+    UserFacingError,  # noqa: E402  pylint: disable=wrong-import-position
+)
 
 ASSETS_DIR = ROOT_DIR / "assets" / "sample_bills"
 SUPPORTED_SUFFIXES = {".png", ".jpg", ".jpeg"}
