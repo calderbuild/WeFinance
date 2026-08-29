@@ -23,7 +23,7 @@ from collections import defaultdict
 MANIFEST = {
     "name": "wefinance-recommend",
     "display_name": "WeFinance Investment Recommendations",
-    "version": "0.1.5",
+    "version": "0.1.6",
     "description": "Generate explainable investment recommendations grounded in the user's real spending data.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample"],
@@ -150,7 +150,15 @@ def _friendly_sampling_error(error: dict) -> str:
             if isinstance(code_num, int)
             else ""
         )
-    return SAMPLING_ERROR_MESSAGES.get(code_name, str(error))
+    friendly = SAMPLING_ERROR_MESSAGES.get(code_name, "")
+    # The host's JSON-RPC error carries its own human-readable `message`
+    # (e.g. which provider/model failed and why). Appending it instead of
+    # discarding it is what turns "The LLM provider had an error." into
+    # something actually diagnosable from the invoke result alone.
+    detail = error.get("message") if isinstance(error, dict) else None
+    if friendly and detail:
+        return f"{friendly} ({detail})"
+    return detail or friendly or str(error)
 
 
 # --- Metrics (ported from RecommendationService.analyze_transactions,

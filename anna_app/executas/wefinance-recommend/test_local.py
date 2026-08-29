@@ -8,12 +8,36 @@ full describe -> initialize -> invoke -> sampling(json_schema) -> return
 round trip is exercised against the real wire protocol.
 """
 
+import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
 
 PLUGIN = Path(__file__).parent / "wefinance_recommend.py"
+
+
+def test_friendly_sampling_error_surfaces_provider_detail() -> None:
+    """The host's JSON-RPC error.message must not be discarded -- regression
+    check for the bug Anna support flagged: -32003 was rendering as a canned
+    "try again" string with no way to tell what actually failed upstream."""
+    spec = importlib.util.spec_from_file_location("wefinance_recommend", PLUGIN)
+    assert spec is not None and spec.loader is not None, "failed to load plugin module"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    friendly = module._friendly_sampling_error(
+        {
+            "code": -32003,
+            "message": "upstream provider rejected the request: bad json_schema mode",
+        }
+    )
+    assert "bad json_schema mode" in friendly, friendly
+    assert "LLM provider had an error" in friendly, (
+        friendly
+    )  # still human-friendly, not raw dump
+    print("friendly_sampling_error surfaces provider detail: OK")
+
 
 FAKE_RECS = {
     "recommendations": [
@@ -52,6 +76,8 @@ def recv(proc: subprocess.Popen) -> dict:
 
 
 def main() -> int:
+    test_friendly_sampling_error_surfaces_provider_detail()
+
     proc = subprocess.Popen(
         [sys.executable, str(PLUGIN)],
         stdin=subprocess.PIPE,
