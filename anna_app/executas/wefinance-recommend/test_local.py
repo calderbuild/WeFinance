@@ -9,22 +9,30 @@ round trip is exercised against the real wire protocol.
 """
 
 import importlib.util
+import io
 import json
+import queue
 import subprocess
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 
 PLUGIN = Path(__file__).parent / "wefinance_recommend.py"
+
+
+def _load_plugin_module():
+    spec = importlib.util.spec_from_file_location("wefinance_recommend", PLUGIN)
+    assert spec is not None and spec.loader is not None, "failed to load plugin module"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_friendly_sampling_error_surfaces_provider_detail() -> None:
     """The host's JSON-RPC error.message must not be discarded -- regression
     check for the bug Anna support flagged: -32003 was rendering as a canned
     "try again" string with no way to tell what actually failed upstream."""
-    spec = importlib.util.spec_from_file_location("wefinance_recommend", PLUGIN)
-    assert spec is not None and spec.loader is not None, "failed to load plugin module"
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = _load_plugin_module()
 
     friendly = module._friendly_sampling_error(
         {
@@ -37,6 +45,34 @@ def test_friendly_sampling_error_surfaces_provider_detail() -> None:
         friendly
     )  # still human-friendly, not raw dump
     print("friendly_sampling_error surfaces provider detail: OK")
+
+
+def test_sampling_timeout_produces_diagnosable_message() -> None:
+    """str(queue.Empty()) is "" -- a bare `q.get(timeout=...)` that times out
+    used to propagate that empty string all the way to the invoke result,
+    reproducing the exact silent-empty-error shell this investigation was
+    about, just from a different cause (no host response within 50s, not a
+    JSON-RPC error)."""
+    module = _load_plugin_module()
+    module.v2_negotiated = True  # type: ignore[attr-defined]
+
+    class InstantEmptyQueue:
+        def get(self, timeout=None):  # noqa: ARG002 -- must match real Queue.get's kwarg name
+            raise queue.Empty()
+
+        def put(self, *_args, **_kwargs):
+            pass
+
+    module.queue.Queue = lambda: InstantEmptyQueue()
+
+    try:
+        with redirect_stdout(io.StringIO()):  # swallow the plugin's _send() line
+            module._request_structured_completion("invoke-1", "prompt", 100)
+        raise AssertionError("expected RuntimeError, got no exception")
+    except RuntimeError as exc:
+        assert str(exc) != "", "timeout must not surface as an empty string"
+        assert "50s" in str(exc), str(exc)
+    print("sampling timeout surfaces a diagnosable message: OK")
 
 
 FAKE_RECS = {
@@ -77,6 +113,7 @@ def recv(proc: subprocess.Popen) -> dict:
 
 def main() -> int:
     test_friendly_sampling_error_surfaces_provider_detail()
+    test_sampling_timeout_produces_diagnosable_message()
 
     proc = subprocess.Popen(
         [sys.executable, str(PLUGIN)],

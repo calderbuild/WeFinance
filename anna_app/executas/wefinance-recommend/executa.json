@@ -1,7 +1,7 @@
 {
   "slug": "wefinance-recommend",
   "name": "WeFinance Investment Recommendations",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "executa_type": "tool",
   "description": "Generate explainable investment recommendations grounded in real spending data.",
   "tool_id": "tool-calderbuild-wefinance-investment-recommendations-r2q5jdey",

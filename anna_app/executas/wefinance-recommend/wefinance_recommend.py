@@ -23,7 +23,7 @@ from collections import defaultdict
 MANIFEST = {
     "name": "wefinance-recommend",
     "display_name": "WeFinance Investment Recommendations",
-    "version": "0.1.6",
+    "version": "0.1.7",
     "description": "Generate explainable investment recommendations grounded in the user's real spending data.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample"],
@@ -334,7 +334,19 @@ def _request_structured_completion(
             },
         }
     )
-    resp = q.get(timeout=50)
+    try:
+        resp = q.get(timeout=50)
+    except queue.Empty as exc:
+        # str(queue.Empty()) is "" -- letting this propagate bare produces
+        # the exact silent-empty-error shell this whole investigation was
+        # about, just from a different cause (no response within 50s,
+        # not a JSON-RPC error) than the sampling-provider-error path above.
+        raise RuntimeError(
+            f"No sampling/createMessage response from host within 50s "
+            f"(invoke_id={invoke_id}, request_id={rid})"
+        ) from exc
+    finally:
+        host_responses.pop(rid, None)
     if "error" in resp:
         raise RuntimeError(_friendly_sampling_error(resp["error"]))
 
