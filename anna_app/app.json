@@ -4,5 +4,10 @@
   "category": "utilities",
   "tagline": "Turn a photo of a bill into spending insight and explainable investment advice.",
   "description": "WeFinance reads a photo of a bill, receipt, or payment screenshot and turns it into structured transactions, then answers financial questions and gives explainable, data-grounded investment recommendations -- all from what you actually spent, not a linked bank account.",
-  "pricing_model": "free"
+  "pricing_model": "free",
+  "bundled_executas": {
+    "bill-scanner": { "path": "./executas/wefinance-ocr" },
+    "advisor-chat": { "path": "./executas/wefinance-chat" },
+    "investment-recommendations": { "path": "./executas/wefinance-recommend" }
+  }
 }
