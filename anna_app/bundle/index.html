@@ -9,14 +9,60 @@
     <header class="app-header">
       <h1>WeFinance</h1>
       <nav class="tabs" role="tablist">
-        <button class="tab-btn is-active" data-tab="scan" role="tab">Scan a bill</button>
+        <button class="tab-btn is-active" data-tab="overview" role="tab">Overview</button>
+        <button class="tab-btn" data-tab="scan" role="tab">Scan a bill</button>
         <button class="tab-btn" data-tab="ask" role="tab">Ask the advisor</button>
         <button class="tab-btn" data-tab="recommend" role="tab">Get recommendations</button>
       </nav>
     </header>
 
     <main id="root">
-      <section id="panel-scan" class="panel is-active" role="tabpanel">
+      <section id="panel-overview" class="panel is-active" role="tabpanel">
+        <div id="overview-empty" class="empty-state" hidden>
+          <p>No transactions yet. Scan a bill to start building your spending picture.</p>
+          <button id="overview-empty-cta" type="button">Scan a bill</button>
+        </div>
+
+        <div id="overview-content" hidden>
+          <div class="health-card">
+            <div class="health-card-row">
+              <div class="health-stat">
+                <div class="health-label">Budget</div>
+                <div class="health-value">
+                  <span>$</span
+                  ><input id="budget-input" type="number" min="0" step="1" />
+                </div>
+              </div>
+              <div class="health-stat">
+                <div class="health-label">Spent this month</div>
+                <div class="health-value" id="health-spent"></div>
+              </div>
+              <div class="health-stat">
+                <div class="health-label">Remaining</div>
+                <div class="health-value" id="health-remaining"></div>
+              </div>
+              <div class="health-status">
+                <span id="health-badge" class="badge"></span>
+              </div>
+            </div>
+            <div class="usage-bar">
+              <div id="usage-bar-fill" class="usage-bar-fill"></div>
+            </div>
+          </div>
+
+          <div class="trend-block">
+            <h2>Monthly spending</h2>
+            <div id="trend-months" class="bar-list"></div>
+          </div>
+
+          <div class="trend-block">
+            <h2>This month by category</h2>
+            <div id="trend-categories" class="bar-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="panel-scan" class="panel" role="tabpanel" hidden>
         <p class="hint">
           Upload a photo of a bill, receipt, or payment screenshot. WeFinance's Bill
           Scanner reads it and returns structured transactions.

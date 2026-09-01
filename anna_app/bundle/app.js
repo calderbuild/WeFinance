@@ -8,8 +8,11 @@ const TOOL_IDS = {
   recommend: "tool-calderbuild-wefinance-investment-recommendations-r2q5jdey",
 };
 
+const DEFAULT_BUDGET = 5000;
+
 const state = {
   transactions: [],
+  budget: DEFAULT_BUDGET,
 };
 
 let anna;
@@ -79,6 +82,141 @@ async function persistTransactions() {
   await anna.storage.set({ key: "transactions", value: state.transactions });
 }
 
+async function persistBudget() {
+  await anna.storage.set({ key: "budget", value: state.budget });
+}
+
+function monthKey(dateStr) {
+  return typeof dateStr === "string" ? dateStr.slice(0, 7) : "";
+}
+
+function formatMoney(amount) {
+  const value = Number(amount || 0);
+  const sign = value < 0 ? "-" : "";
+  return `${sign}$${Math.abs(value).toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  })}`;
+}
+
+function formatMonthLabel(key) {
+  const [year, month] = key.split("-");
+  if (!year || !month) return key;
+  const date = new Date(Number(year), Number(month) - 1, 1);
+  return date.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+}
+
+function renderBarList(container, rows) {
+  container.innerHTML = "";
+  if (!rows.length) {
+    container.innerHTML = `<p class="hint">No spending recorded yet.</p>`;
+    return;
+  }
+  const max = Math.max(...rows.map((r) => r.amount), 1);
+  for (const row of rows) {
+    const el = document.createElement("div");
+    el.className = "bar-row";
+    const pct = Math.max(2, Math.round((row.amount / max) * 100));
+    el.innerHTML = `
+      <div class="bar-row-label">${row.label}</div>
+      <div class="bar-track"><div class="bar-fill" style="width: ${pct}%"></div></div>
+      <div class="bar-row-value">${formatMoney(row.amount)}</div>
+    `;
+    container.appendChild(el);
+  }
+}
+
+function renderOverview() {
+  const empty = document.getElementById("overview-empty");
+  const content = document.getElementById("overview-content");
+
+  if (!state.transactions.length) {
+    empty.hidden = false;
+    content.hidden = true;
+    return;
+  }
+  empty.hidden = true;
+  content.hidden = false;
+
+  // "This month" tracks the app's own data (latest scanned transaction),
+  // not the device clock -- a personal ledger's current period is defined
+  // by what's actually been scanned, not by wall-clock date.
+  const latestMonth = state.transactions
+    .map((t) => monthKey(t.date))
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+
+  const thisMonthTxns = state.transactions.filter((t) => monthKey(t.date) === latestMonth);
+  const totalSpent = thisMonthTxns.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+  const remaining = state.budget - totalSpent;
+  const usageRate = state.budget > 0 ? (totalSpent / state.budget) * 100 : 0;
+
+  let statusLabel = "Healthy";
+  let statusType = "healthy";
+  if (usageRate >= 100) {
+    statusLabel = "Overspent";
+    statusType = "danger";
+  } else if (usageRate >= 85) {
+    statusLabel = "Caution";
+    statusType = "warning";
+  } else if (usageRate >= 60) {
+    statusLabel = "Good";
+    statusType = "healthy";
+  }
+
+  const budgetInput = document.getElementById("budget-input");
+  if (document.activeElement !== budgetInput) {
+    budgetInput.value = state.budget;
+  }
+  document.getElementById("health-spent").textContent = formatMoney(totalSpent);
+  const remainingEl = document.getElementById("health-remaining");
+  remainingEl.textContent = formatMoney(remaining);
+  remainingEl.classList.toggle("is-negative", remaining < 0);
+  const badge = document.getElementById("health-badge");
+  badge.textContent = statusLabel;
+  badge.className = `badge ${statusType}`;
+  const fill = document.getElementById("usage-bar-fill");
+  fill.style.width = `${Math.min(usageRate, 100)}%`;
+  fill.className = `usage-bar-fill ${statusType === "healthy" ? "" : statusType}`.trim();
+
+  const monthTotals = new Map();
+  for (const t of state.transactions) {
+    const key = monthKey(t.date);
+    if (!key) continue;
+    monthTotals.set(key, (monthTotals.get(key) || 0) + (Number(t.amount) || 0));
+  }
+  const monthRows = [...monthTotals.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-6)
+    .map(([key, amount]) => ({ label: formatMonthLabel(key), amount }));
+  renderBarList(document.getElementById("trend-months"), monthRows);
+
+  const categoryTotals = new Map();
+  for (const t of thisMonthTxns) {
+    const key = t.category || "Other";
+    categoryTotals.set(key, (categoryTotals.get(key) || 0) + (Number(t.amount) || 0));
+  }
+  const categoryRows = [...categoryTotals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, amount]) => ({ label, amount }));
+  renderBarList(document.getElementById("trend-categories"), categoryRows);
+}
+
+function setupOverviewPanel() {
+  const budgetInput = document.getElementById("budget-input");
+  budgetInput.addEventListener("change", async () => {
+    const value = Number(budgetInput.value);
+    state.budget = Number.isFinite(value) && value >= 0 ? value : DEFAULT_BUDGET;
+    await persistBudget();
+    renderOverview();
+  });
+
+  document.getElementById("overview-empty-cta").addEventListener("click", () => {
+    document.querySelector('.tab-btn[data-tab="scan"]').click();
+  });
+}
+
 function setupTabs() {
   const buttons = document.querySelectorAll(".tab-btn");
   buttons.forEach((btn) => {
@@ -112,6 +250,7 @@ function setupScanPanel() {
       state.transactions = state.transactions.concat(newTxns);
       renderTransactionTable(state.transactions);
       refreshTransactionCounts();
+      renderOverview();
       await persistTransactions();
       setStatus(
         statusEl,
@@ -221,7 +360,12 @@ async function main() {
     state.transactions = persisted;
     renderTransactionTable(state.transactions);
   }
+  const persistedBudget = anna.runtimeState?.budget;
+  if (typeof persistedBudget === "number" && persistedBudget >= 0) {
+    state.budget = persistedBudget;
+  }
   refreshTransactionCounts();
+  renderOverview();
 
   anna.on("runtime_state_synced", (syncedState) => {
     if (Array.isArray(syncedState?.transactions)) {
@@ -229,9 +373,14 @@ async function main() {
       renderTransactionTable(state.transactions);
       refreshTransactionCounts();
     }
+    if (typeof syncedState?.budget === "number" && syncedState.budget >= 0) {
+      state.budget = syncedState.budget;
+    }
+    renderOverview();
   });
 
   setupTabs();
+  setupOverviewPanel();
   setupScanPanel();
   setupAskPanel();
   setupRecommendPanel();
