@@ -64,7 +64,7 @@ from datetime import date, datetime
 MANIFEST = {
     "name": "wefinance-ocr",
     "display_name": "WeFinance Bill Scanner",
-    "version": "0.1.6",
+    "version": "0.1.7",
     "description": "Extract structured transactions from a photo of a bill, receipt, or payment screenshot.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample", "llm.agent.auto"],
@@ -439,6 +439,16 @@ def create_session(invoke_id: str) -> str:
             "kind": "agent",
             "agent_submode": "auto",
             "label": "wefinance-ocr",
+            # This Tool never calls another executa tool, but the host grants
+            # every host tool (granted_tools: ["*"]) unless told otherwise.
+            # That's what broke Bill Scanner in production: OpenRouter routes
+            # sessions with any granted tools to endpoints supporting tool
+            # use, and the vision model we get hinted to (gemini-2.5-flash-
+            # image) has zero such endpoints, so the run 404s before it ever
+            # sees the image ("No endpoints found that support tool use",
+            # confirmed from a real host response, see wefinance-ocr 404 in
+            # the App Review thread).
+            "inherit_host_tools": False,
             "metadata": {"executa_invoke_id": invoke_id},
         },
         timeout=25,
@@ -486,10 +496,19 @@ def run_session(
             # completion delta -- content text lives at
             # choices[0].delta.content, alongside control-only deltas like
             # task_info/processing_started/task_complete that carry no text.
+            # A routing/provider failure (e.g. OpenRouter 404 "no endpoints
+            # support tool use") also rides in on an 'sse' frame, as a
+            # top-level `error` string sibling to `choices` -- confirmed from
+            # a real production failure where this went unhandled and the
+            # whole 7-frame response got dumped as "no usable frame" instead.
+            if frame.get("error"):
+                raise RuntimeError(
+                    f"scanning backend rejected the run: {frame['error']}"
+                )
             for choice in frame.get("choices") or []:
-                content = (choice.get("delta") or {}).get("content")
-                if isinstance(content, str) and content:
-                    deltas.append(content)
+                delta_content = (choice.get("delta") or {}).get("content")
+                if isinstance(delta_content, str) and delta_content:
+                    deltas.append(delta_content)
         elif ev in ("delta", "token", "message"):
             txt = frame.get("text") or ""
             if txt:

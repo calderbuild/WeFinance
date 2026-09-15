@@ -140,6 +140,11 @@ def main() -> int:
         assert create_rpc["method"] == "agent/session.create", create_rpc
         assert create_rpc["params"]["kind"] == "agent", create_rpc
         assert create_rpc["params"]["agent_submode"] == "auto", create_rpc
+        assert create_rpc["params"]["inherit_host_tools"] is False, (
+            "must opt out of the default granted_tools=['*'] -- that's what "
+            "made OpenRouter require tool-use support and 404 in production",
+            create_rpc,
+        )
         print("agent/session.create request: OK (well-formed)")
 
         send(
@@ -159,9 +164,9 @@ def main() -> int:
         run_rpc = recv(proc)
         assert run_rpc["method"] == "agent/session.run", run_rpc
         assert run_rpc["params"]["app_session_uuid"] == "sess-fake-1", run_rpc
-        assert (
-            run_rpc["params"]["modelPreferences"]["hints"][0]["name"] == "gemini"
-        ), run_rpc
+        assert run_rpc["params"]["modelPreferences"]["hints"][0]["name"] == "gemini", (
+            run_rpc
+        )
         attachments = run_rpc["params"]["attachments"]
         assert len(attachments) == 1, run_rpc
         assert attachments[0]["type"] == "image/jpeg", run_rpc
@@ -384,6 +389,91 @@ def main() -> int:
         print(
             "invalid base64: OK (rejected fast with a clear error, no session opened)"
         )
+
+        # 5c. real production failure shape: a provider/routing error (e.g.
+        #     OpenRouter 404 "no endpoints support tool use") rides in on a
+        #     normal event=="sse" frame as a top-level `error` string sibling
+        #     to `choices`, then a stream_end frame, then a raw "[DONE]" --
+        #     none of which carry usable content. Must surface a short,
+        #     diagnosable error, not silently fall through to the generic
+        #     "no usable frame" fallback with the whole response dumped.
+        send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 53,
+                "method": "invoke",
+                "params": {
+                    "tool": "extract_transactions",
+                    "arguments": {
+                        "image_base64": FAKE_IMAGE_BASE64,
+                        "image_type": "image/jpeg",
+                    },
+                    "context": {"invoke_id": "test-invoke-routing-404"},
+                },
+            },
+        )
+        create_rpc = recv(proc)
+        assert create_rpc["method"] == "agent/session.create", create_rpc
+        send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": create_rpc["id"],
+                "result": {"app_session_uuid": "sess-fake-404"},
+            },
+        )
+        run_rpc = recv(proc)
+        assert run_rpc["method"] == "agent/session.run", run_rpc
+        send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": run_rpc["id"],
+                "result": {
+                    "run_id": "run-fake-404",
+                    "stream_id": "strm-fake-404",
+                    "frames": [
+                        {"event": "started"},
+                        {
+                            "event": "run_meta",
+                            "inherit_host_tools": True,
+                            "granted_tools": ["*"],
+                            "model": "google/gemini-2.5-flash-image",
+                            "provider": "openrouter",
+                        },
+                        {
+                            "event": "sse",
+                            "error": (
+                                "Error code: 404 - {'error': {'message': "
+                                "'No endpoints found that support tool use.'"
+                                "}}"
+                            ),
+                        },
+                        {
+                            "event": "sse",
+                            "event_type": "stream_end",
+                            "reason": "task_failed",
+                        },
+                        {"event": "raw", "text": "[DONE]"},
+                    ],
+                    "final": None,
+                },
+            },
+        )
+        close_rpc = recv(proc)
+        assert close_rpc["method"] == "agent/session.delete", close_rpc
+        send(
+            proc,
+            {"jsonrpc": "2.0", "id": close_rpc["id"], "result": {"status": "deleted"}},
+        )
+        final = recv(proc)
+        assert final["id"] == 53, final
+        assert final["result"]["success"] is False, final
+        err = final["result"]["error"]
+        assert "No endpoints found that support tool use" in err, err
+        assert len(err) < 300, ("error must stay short, not dump all frames", err)
+        print("routing/provider 404 on an sse frame: OK (short, diagnosable error)")
 
         # 6. health -- executa-lifecycle.md's documented shape
         send(proc, {"jsonrpc": "2.0", "id": 6, "method": "health"})
