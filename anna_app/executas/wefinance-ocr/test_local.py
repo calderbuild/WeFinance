@@ -3,16 +3,19 @@
 
 Same host-simulation approach as the other two Tools' test_local.py: spawn
 the plugin as a real subprocess and play the "host" role ourselves. This one
-simulates the Agent Sessions round trip (agent/session.create ->
-agent/session.run -> agent/session.delete) instead of Sampling, since
+simulates a single agent/complete round trip instead of Sampling, since
 sampling/createMessage cannot carry image content.
 
-Wire shapes below (method names, agent/session.create's kind="agent" +
-agent_submode="auto", app_session_uuid, and session.run's buffered
-{frames: [...]} response) are confirmed against
-staging.anna.partners/developers/tools/executa-agent.md and
-.../developers/apps/llm-and-agent.md (2026-08-09), not guessed -- see the
-docstring in plugin.py for what changed from the first draft.
+v0.2.0 switched off the stateful agent/session.create + session.run +
+session.delete sequence (kept 404ing in production -- no documented way to
+opt this Tool's session out of tool inheritance, see wefinance_ocr.py's
+module docstring for the full root-cause writeup) to a single agent/complete
+call, which never creates a tool-using session in the first place.
+
+Wire shapes below (method name, buffered {frames: [...]} response) are
+confirmed against staging.anna.partners/developers/tools/executa-agent.md
+and .../developers/apps/llm-and-agent.md (2026-08-09), not guessed -- see
+the docstring in wefinance_ocr.py for what changed and why.
 """
 
 import base64
@@ -116,8 +119,8 @@ def main() -> int:
         assert resp["result"]["success"] is False, resp
         print("missing-image guard: OK")
 
-        # 4. real invoke -> plugin should create a session, then run it with
-        #    the image as an attachment
+        # 4. real invoke -> plugin should issue a single agent/complete call
+        #    carrying the image as an attachment (no session.create/delete)
         send(
             proc,
             {
@@ -136,45 +139,20 @@ def main() -> int:
             },
         )
 
-        create_rpc = recv(proc)
-        assert create_rpc["method"] == "agent/session.create", create_rpc
-        assert create_rpc["params"]["kind"] == "agent", create_rpc
-        assert create_rpc["params"]["agent_submode"] == "auto", create_rpc
-        assert create_rpc["params"]["inherit_host_tools"] is False, (
-            "must opt out of the default granted_tools=['*'] -- that's what "
-            "made OpenRouter require tool-use support and 404 in production",
-            create_rpc,
-        )
-        print("agent/session.create request: OK (well-formed)")
-
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": create_rpc["id"],
-                "result": {
-                    "app_session_uuid": "sess-fake-1",
-                    "thread_id": "thr-fake-1",
-                    "agent_submode": "auto",
-                    "granted_tools": [],
-                },
-            },
-        )
-
-        run_rpc = recv(proc)
-        assert run_rpc["method"] == "agent/session.run", run_rpc
-        assert run_rpc["params"]["app_session_uuid"] == "sess-fake-1", run_rpc
-        assert run_rpc["params"]["modelPreferences"]["hints"][0]["name"] == "gemini", (
-            run_rpc
-        )
-        attachments = run_rpc["params"]["attachments"]
-        assert len(attachments) == 1, run_rpc
-        assert attachments[0]["type"] == "image/jpeg", run_rpc
-        assert attachments[0]["data"] == FAKE_IMAGE_BASE64, run_rpc
-        assert attachments[0]["filename"] == "receipt.jpg", run_rpc
-        assert "transaction_count" in run_rpc["params"]["content"], run_rpc
+        complete_rpc = recv(proc)
+        assert complete_rpc["method"] == "agent/complete", complete_rpc
+        assert (
+            complete_rpc["params"]["modelPreferences"]["hints"][0]["name"] == "gemini"
+        ), complete_rpc
+        attachments = complete_rpc["params"]["attachments"]
+        assert len(attachments) == 1, complete_rpc
+        assert attachments[0]["type"] == "image/jpeg", complete_rpc
+        assert attachments[0]["data"] == FAKE_IMAGE_BASE64, complete_rpc
+        assert attachments[0]["filename"] == "receipt.jpg", complete_rpc
+        assert "transaction_count" in complete_rpc["params"]["content"], complete_rpc
         print(
-            "agent/session.run request: OK (attachment + modelPreferences well-formed)"
+            "agent/complete request: OK (attachment + modelPreferences well-formed, "
+            "no session.create/delete)"
         )
 
         # buffered-streaming response shape: {run_id, stream_id, frames: [...], final}
@@ -182,7 +160,7 @@ def main() -> int:
             proc,
             {
                 "jsonrpc": "2.0",
-                "id": run_rpc["id"],
+                "id": complete_rpc["id"],
                 "result": {
                     "run_id": "run-fake-1",
                     "stream_id": "strm-fake-1",
@@ -197,16 +175,6 @@ def main() -> int:
                     "final": True,
                 },
             },
-        )
-
-        close_rpc = recv(proc)
-        assert close_rpc["method"] == "agent/session.delete", close_rpc
-        assert close_rpc["params"]["app_session_uuid"] == "sess-fake-1", close_rpc
-        print("agent/session.delete request: OK")
-
-        send(
-            proc,
-            {"jsonrpc": "2.0", "id": close_rpc["id"], "result": {"status": "deleted"}},
         )
 
         final = recv(proc)
@@ -260,23 +228,13 @@ def main() -> int:
                 },
             },
         )
-        create_rpc = recv(proc)
-        assert create_rpc["method"] == "agent/session.create", create_rpc
+        complete_rpc = recv(proc)
+        assert complete_rpc["method"] == "agent/complete", complete_rpc
         send(
             proc,
             {
                 "jsonrpc": "2.0",
-                "id": create_rpc["id"],
-                "result": {"app_session_uuid": "sess-fake-2"},
-            },
-        )
-        run_rpc = recv(proc)
-        assert run_rpc["method"] == "agent/session.run", run_rpc
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": run_rpc["id"],
+                "id": complete_rpc["id"],
                 "result": {
                     "run_id": "run-fake-2",
                     "stream_id": "strm-fake-2",
@@ -288,12 +246,6 @@ def main() -> int:
                 },
             },
         )
-        close_rpc = recv(proc)
-        assert close_rpc["method"] == "agent/session.delete", close_rpc
-        send(
-            proc,
-            {"jsonrpc": "2.0", "id": close_rpc["id"], "result": {"status": "deleted"}},
-        )
         final = recv(proc)
         assert final["id"] == 5, final
         assert final["result"]["success"] is True, final
@@ -304,7 +256,7 @@ def main() -> int:
         # 5a. image_base64 arrives as a data: URI (the natural shape a browser
         #     file input / Anna App UI FileReader would hand us) -> must be
         #     stripped to clean base64 before it's forwarded as an attachment,
-        #     and the sanitized (not raw) value must be what session.run sees.
+        #     and the sanitized (not raw) value must be what agent/complete sees.
         #     This is the fix for the Anna App Review's Bill Scanner 400:
         #     "the image payload is not accepted as valid base64 image data."
         data_uri = f"data:image/png;base64,{FAKE_IMAGE_BASE64}"
@@ -324,27 +276,17 @@ def main() -> int:
                 },
             },
         )
-        create_rpc = recv(proc)
-        assert create_rpc["method"] == "agent/session.create", create_rpc
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": create_rpc["id"],
-                "result": {"app_session_uuid": "sess-fake-datauri"},
-            },
-        )
-        run_rpc = recv(proc)
-        assert run_rpc["method"] == "agent/session.run", run_rpc
-        assert run_rpc["params"]["attachments"][0]["data"] == FAKE_IMAGE_BASE64, (
+        complete_rpc = recv(proc)
+        assert complete_rpc["method"] == "agent/complete", complete_rpc
+        assert complete_rpc["params"]["attachments"][0]["data"] == FAKE_IMAGE_BASE64, (
             "data: URI prefix must be stripped before forwarding",
-            run_rpc,
+            complete_rpc,
         )
         send(
             proc,
             {
                 "jsonrpc": "2.0",
-                "id": run_rpc["id"],
+                "id": complete_rpc["id"],
                 "result": {
                     "run_id": "run-fake-datauri",
                     "stream_id": "strm-fake-datauri",
@@ -355,19 +297,13 @@ def main() -> int:
                 },
             },
         )
-        close_rpc = recv(proc)
-        assert close_rpc["method"] == "agent/session.delete", close_rpc
-        send(
-            proc,
-            {"jsonrpc": "2.0", "id": close_rpc["id"], "result": {"status": "deleted"}},
-        )
         final = recv(proc)
         assert final["id"] == 51, final
         assert final["result"]["success"] is True, final
-        print("data: URI prefix: OK (stripped before forwarding to session.run)")
+        print("data: URI prefix: OK (stripped before forwarding to agent/complete)")
 
         # 5b. genuinely invalid base64 -> fails fast with a clear message,
-        #     never silently forwarded to session.run.
+        #     never silently forwarded to agent/complete.
         send(
             proc,
             {
@@ -413,23 +349,13 @@ def main() -> int:
                 },
             },
         )
-        create_rpc = recv(proc)
-        assert create_rpc["method"] == "agent/session.create", create_rpc
+        complete_rpc = recv(proc)
+        assert complete_rpc["method"] == "agent/complete", complete_rpc
         send(
             proc,
             {
                 "jsonrpc": "2.0",
-                "id": create_rpc["id"],
-                "result": {"app_session_uuid": "sess-fake-404"},
-            },
-        )
-        run_rpc = recv(proc)
-        assert run_rpc["method"] == "agent/session.run", run_rpc
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": run_rpc["id"],
+                "id": complete_rpc["id"],
                 "result": {
                     "run_id": "run-fake-404",
                     "stream_id": "strm-fake-404",
@@ -437,8 +363,6 @@ def main() -> int:
                         {"event": "started"},
                         {
                             "event": "run_meta",
-                            "inherit_host_tools": True,
-                            "granted_tools": ["*"],
                             "model": "google/gemini-2.5-flash-image",
                             "provider": "openrouter",
                         },
@@ -460,12 +384,6 @@ def main() -> int:
                     "final": None,
                 },
             },
-        )
-        close_rpc = recv(proc)
-        assert close_rpc["method"] == "agent/session.delete", close_rpc
-        send(
-            proc,
-            {"jsonrpc": "2.0", "id": close_rpc["id"], "result": {"status": "deleted"}},
         )
         final = recv(proc)
         assert final["id"] == 53, final

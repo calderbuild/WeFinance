@@ -7,47 +7,72 @@ over stdio (Anna Executa protocol v2).
 
 Unlike wefinance-chat/wefinance-recommend, this Tool does NOT use Sampling
 (sampling/createMessage only accepts text content -- confirmed with Anna's
-team, see annaresearch.md). It uses Anna's Agent Sessions instead
-(host_capabilities: ["llm.sample", "llm.agent.auto"]), which support native
-image input via an `attachments` array:
+team, see annaresearch.md). It uses Anna's Agent Sessions family instead
+(host_capabilities: ["llm.sample", "llm.agent.auto"]), which supports native
+image input via an `attachments` array on the call:
 
-    session.run(content=prompt, attachments=[
+    agent/complete(content=prompt, attachments=[
         {"type": "image/jpeg", "data": "<base64>", "filename": "receipt.jpg"}
     ])
 
 per developers/apps/llm-and-agent.md section 3.0a and developers/tools/executa-agent.md
-(both confirmed 2026-08-09 against staging.anna.partners). This lets the Tool
+(confirmed 2026-08-09 against staging.anna.partners). This lets the Tool
 avoid shipping its own OPENAI_API_KEY entirely -- the host routes the vision
 call through the user's own plan, same as the other two Tools do for text.
 
+History: v0.1.x used a stateful agent/session.create + session.run + delete
+sequence (kind="agent", agent_submode="auto"). That's how Anna's own
+reference plugin does it, but it kept 404ing in production with "No
+endpoints found that support tool use": OpenRouter routes any session with
+granted tools to tool-use-capable endpoints, and the vision model we get
+hinted to (gemini-2.5-flash-image) has none. v0.1.9 tried to opt out via
+quotaCaps.inherit_host_tools: false on session.create -- shipped, verified
+through the CLI dev-harness, and still failed identically on three
+consecutive real Chrome-UI retests (run_meta kept reporting
+inherit_host_tools: True / granted_tools: ["*"] regardless of what the
+create call asked for).
+
+Root cause (confirmed by reading reference-executa-agent-sessions.json
+directly, not guessed): quotaCaps/inherit_host_tools/allowed_tools/
+granted_tools are ONLY documented under the Host API's agent.session.create
+(the App's own iframe JS, postMessage transport) -- NOT under this Tool's
+reverse-RPC agent/session.create, whose reference entry says nothing about
+tool-grant control beyond "Identity is derived from the sampling_token --
+the plugin cannot override it." The Host API docs even say allowed_tools
+only narrows "sandbox sessions only" -- if the grant behind a session was
+never sandboxed, no per-call param changes that. There is no documented way
+for a stdio Tool to opt out of tool inheritance via session.create.
+
+v0.2.0 switches to agent/complete: "L1 one-shot completion... sugar for
+plugins that don't need state" (same host_capabilities grant, same auth
+chain as agent/session.*, "same wire frames" per the reference docs). Bill
+Scanner only ever needs one completion per invoke, so this avoids creating
+a stateful, tool-using Agent Session in the first place -- sidestepping the
+tool-inheritance question by construction instead of by an unsupported
+parameter. This was unverified until tested against the real Chrome UI: the
+CLI dev-harness's --agent-account path was later found to mint tokens via a
+separate dev-only endpoint (POST /api/v1/anna-apps/dev/session/mint), so a
+CLI pass alone doesn't prove anything about this class of bug -- see
+test_local.py and the App Review thread for the real-UI verification.
+
 Wire protocol notes (confirmed, not inferred):
-- Reverse-RPC methods: agent/session.create, agent/session.run,
-  agent/session.delete (NOT .close -- earlier draft guessed wrong).
-- session.create uses kind="agent" + agent_submode="auto" (kind="fixed" is
-  for pinning to ONE other already-registered executa tool via
-  fixed_client_id -- not applicable here, we're not calling another tool).
-  Response carries the session id under app_session_uuid (not session_id).
-- session.run is buffered streaming in protocol v2: the host returns
-  {run_id, stream_id, frames: [...], final} once the run completes, not a
-  single text blob like sampling's response. The answer text lives on the
-  frame with event == "final" -- and per the shipped reference plugin
-  (examples/python/executa-agent-demo), a run can also terminate on a
+- Reverse-RPC method: agent/complete. Response is buffered streaming in
+  protocol v2: the host returns {run_id, stream_id, frames: [...], final}
+  rather than a single text blob like sampling's response. The answer text
+  lives on the frame with event == "final" -- and per the shipped reference
+  plugin (examples/python/executa-agent-demo), a run can also terminate on a
   sentinel-only event == "complete" frame with no text at all, in which case
   the answer is whatever "delta"/"token"/"message" frames were accumulated
   along the way. Handle both, or a model that streams tokens and terminates
   via "complete" would silently return zero transactions.
 - modelPreferences (to force a vision-capable model, avoiding
-  APP_MODEL_NOT_VISION_CAPABLE) is a per-RUN param on session.run, not on
-  session.create.
+  APP_MODEL_NOT_VISION_CAPABLE) is a param on the call itself.
 - initialize()'s "capabilities" key (not "client_capabilities") is confirmed
   correct -- see wefinance_chat.py's module docstring for the full reasoning;
   same applies here, extended with an empty "agent": {} entry since this tool
-  also negotiates Agent Sessions (executa-lifecycle.md: "an empty object is
-  fine -- it means I'm aware of this capability, no extra options").
-Still unverified without live Dev Access: whether agent_submode="auto"
-ever causes the model to attempt a tool call instead of answering directly
-(we don't grant this Tool access to any other executa tools, so it should
-have nothing to call, but this hasn't been exercised against a real host).
+  also negotiates the Agent Sessions family (executa-lifecycle.md: "an empty
+  object is fine -- it means I'm aware of this capability, no extra
+  options").
 """
 
 import base64
@@ -64,7 +89,7 @@ from datetime import date, datetime
 MANIFEST = {
     "name": "wefinance-ocr",
     "display_name": "WeFinance Bill Scanner",
-    "version": "0.1.7",
+    "version": "0.2.0",
     "description": "Extract structured transactions from a photo of a bill, receipt, or payment screenshot.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample", "llm.agent.auto"],
@@ -428,41 +453,14 @@ def _call(method: str, params: dict, timeout: float) -> dict:
     return resp["result"]
 
 
-def create_session(invoke_id: str) -> str:
+def complete(invoke_id: str, content: str, attachments: list) -> str:
     if not v2_negotiated:
         raise RuntimeError(
             "Agent Sessions unavailable: host did not negotiate protocol v2 for this session."
         )
     result = _call(
-        "agent/session.create",
+        "agent/complete",
         {
-            "kind": "agent",
-            "agent_submode": "auto",
-            "label": "wefinance-ocr",
-            # This Tool never calls another executa tool, but the host grants
-            # every host tool (granted_tools: ["*"]) unless told otherwise.
-            # That's what broke Bill Scanner in production: OpenRouter routes
-            # sessions with any granted tools to endpoints supporting tool
-            # use, and the vision model we get hinted to (gemini-2.5-flash-
-            # image) has zero such endpoints, so the run 404s before it ever
-            # sees the image ("No endpoints found that support tool use",
-            # confirmed from a real host response, see wefinance-ocr 404 in
-            # the App Review thread).
-            "inherit_host_tools": False,
-            "metadata": {"executa_invoke_id": invoke_id},
-        },
-        timeout=25,
-    )
-    return result["app_session_uuid"]
-
-
-def run_session(
-    invoke_id: str, app_session_uuid: str, content: str, attachments: list
-) -> str:
-    result = _call(
-        "agent/session.run",
-        {
-            "app_session_uuid": app_session_uuid,
             "content": content,
             "attachments": attachments,
             # vision-capable model required or the run fails fast with
@@ -525,24 +523,15 @@ def run_session(
         return final["text"]
     if deltas:
         return "".join(deltas)
-    raise RuntimeError(f"agent/session.run returned no usable frame: {result!r}")
-
-
-def close_session(app_session_uuid: str) -> None:
-    try:
-        _call(
-            "agent/session.delete", {"app_session_uuid": app_session_uuid}, timeout=10
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"session.delete failed (non-fatal): {exc}", file=sys.stderr)
+    raise RuntimeError(f"agent/complete returned no usable frame: {result!r}")
 
 
 # --- Image payload sanitization ----------------------------------------------
-# The Anna host rejects agent/session.run's attachments[].data with a 400 if it
+# The Anna host rejects agent/complete's attachments[].data with a 400 if it
 # isn't clean base64. Callers (the Anna App UI, a browser file input, etc.) may
 # naturally hand us a full `data:image/jpeg;base64,...` URI or base64 wrapped
 # with newlines -- neither is clean base64, and the host's rejection surfaces
-# as an opaque 400 deep inside session.run with no hint about the real cause.
+# as an opaque 400 deep inside the call with no hint about the real cause.
 # Strip/validate here so a bad payload fails fast with an actionable message
 # instead of that opaque 400.
 
@@ -577,22 +566,17 @@ def extract_transactions(
     image_base64 = _validate_base64_image(image_base64)
     source_hash = hashlib.sha256(image_base64.encode("utf-8")).hexdigest()
 
-    app_session_uuid = create_session(invoke_id)
-    try:
-        raw_text = run_session(
-            invoke_id,
-            app_session_uuid,
-            OCR_PROMPT,
-            [
-                {
-                    "type": image_type,
-                    "data": image_base64,
-                    "filename": filename or "receipt.jpg",
-                }
-            ],
-        )
-    finally:
-        close_session(app_session_uuid)
+    raw_text = complete(
+        invoke_id,
+        OCR_PROMPT,
+        [
+            {
+                "type": image_type,
+                "data": image_base64,
+                "filename": filename or "receipt.jpg",
+            }
+        ],
+    )
 
     parsed = _robust_json_parse(raw_text)
     declared = parsed["transaction_count"]
