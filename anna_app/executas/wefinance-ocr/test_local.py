@@ -4,18 +4,15 @@
 Same host-simulation approach as the other two Tools' test_local.py: spawn
 the plugin as a real subprocess and play the "host" role ourselves. This one
 simulates a single agent/complete round trip instead of Sampling, since
-sampling/createMessage cannot carry image content.
+sampling/createMessage's working shape (per wefinance_chat.py) is text-only
+in practice.
 
-v0.2.0 switched off the stateful agent/session.create + session.run +
-session.delete sequence (kept 404ing in production -- no documented way to
-opt this Tool's session out of tool inheritance, see wefinance_ocr.py's
-module docstring for the full root-cause writeup) to a single agent/complete
-call, which never creates a tool-using session in the first place.
-
-Wire shapes below (method name, buffered {frames: [...]} response) are
-confirmed against staging.anna.partners/developers/tools/executa-agent.md
-and .../developers/apps/llm-and-agent.md (2026-08-09), not guessed -- see
-the docstring in wefinance_ocr.py for what changed and why.
+v0.2.2 request/response shapes are confirmed against
+reference-executa-agent-sessions.json's actual `agent/complete` entry
+(fetched 2026-09-20), not guessed: `messages: list[dict]` (required,
+MCP-shaped `{role, content}`) in, `{content, model, usage}` out (NOT
+buffered streaming -- wire.buffered_streaming: false). See wefinance_ocr.py's
+module docstring for the full history of what changed and why.
 """
 
 import base64
@@ -64,6 +61,15 @@ def recv(proc: subprocess.Popen) -> dict:
     if not line:
         raise RuntimeError("plugin exited unexpectedly (empty stdout read)")
     return json.loads(line)
+
+
+def fake_complete_result(text: str) -> dict:
+    """{content, model, usage} -- agent/complete's real (non-streaming) shape."""
+    return {
+        "content": [{"type": "text", "text": text}],
+        "model": "google/gemini-2.5-flash",
+        "usage": {"input_tokens": 500, "output_tokens": 80, "total_tokens": 580},
+    }
 
 
 def main() -> int:
@@ -120,7 +126,8 @@ def main() -> int:
         print("missing-image guard: OK")
 
         # 4. real invoke -> plugin should issue a single agent/complete call
-        #    carrying the image as an attachment (no session.create/delete)
+        #    carrying the image as a content block on an MCP-shaped message
+        #    (no session.create/delete, no invented content/attachments params)
         send(
             proc,
             {
@@ -132,7 +139,6 @@ def main() -> int:
                     "arguments": {
                         "image_base64": FAKE_IMAGE_BASE64,
                         "image_type": "image/jpeg",
-                        "filename": "receipt.jpg",
                     },
                     "context": {"invoke_id": "test-invoke-3"},
                 },
@@ -141,39 +147,33 @@ def main() -> int:
 
         complete_rpc = recv(proc)
         assert complete_rpc["method"] == "agent/complete", complete_rpc
-        assert (
-            complete_rpc["params"]["modelPreferences"]["hints"][0]["name"] == "gemini"
-        ), complete_rpc
-        attachments = complete_rpc["params"]["attachments"]
-        assert len(attachments) == 1, complete_rpc
-        assert attachments[0]["type"] == "image/jpeg", complete_rpc
-        assert attachments[0]["data"] == FAKE_IMAGE_BASE64, complete_rpc
-        assert attachments[0]["filename"] == "receipt.jpg", complete_rpc
-        assert "transaction_count" in complete_rpc["params"]["content"], complete_rpc
+        params = complete_rpc["params"]
+        assert params["modelPreferences"]["hints"][0]["name"] == "gemini-2.5-flash", (
+            complete_rpc
+        )
+        messages = params["messages"]
+        assert len(messages) == 1 and messages[0]["role"] == "user", complete_rpc
+        blocks = messages[0]["content"]
+        text_blocks = [b for b in blocks if b["type"] == "text"]
+        image_blocks = [b for b in blocks if b["type"] == "image"]
+        assert len(image_blocks) == 1, complete_rpc
+        assert image_blocks[0]["data"] == FAKE_IMAGE_BASE64, complete_rpc
+        assert image_blocks[0]["mimeType"] == "image/jpeg", complete_rpc
+        assert text_blocks and "transaction_count" in text_blocks[0]["text"], (
+            complete_rpc
+        )
         print(
-            "agent/complete request: OK (attachment + modelPreferences well-formed, "
-            "no session.create/delete)"
+            "agent/complete request: OK (messages/content blocks + modelPreferences "
+            "well-formed, no session.create/delete)"
         )
 
-        # buffered-streaming response shape: {run_id, stream_id, frames: [...], final}
+        # {content, model, usage} -- NOT buffered streaming
         send(
             proc,
             {
                 "jsonrpc": "2.0",
                 "id": complete_rpc["id"],
-                "result": {
-                    "run_id": "run-fake-1",
-                    "stream_id": "strm-fake-1",
-                    "frames": [
-                        {"event": "started"},
-                        {
-                            "event": "final",
-                            "text": json.dumps(FAKE_OCR_RESPONSE),
-                            "usage": {"totalTokens": 123},
-                        },
-                    ],
-                    "final": True,
-                },
+                "result": fake_complete_result(json.dumps(FAKE_OCR_RESPONSE)),
             },
         )
 
@@ -195,9 +195,9 @@ def main() -> int:
             "invoke extract_transactions: OK (typo fixup + defaults + id generation correct)"
         )
 
-        # 5. a run terminating via sentinel-only event=="complete" (no text)
-        #    must fall back to accumulated delta/token/message text, matching
-        #    the shipped reference plugin's documented streaming pattern.
+        # 5. multiple text blocks in the response must be concatenated, not
+        #    just the first one taken (a model could split its answer across
+        #    more than one text block).
         simple_response = {
             "transaction_count": 1,
             "transactions": [
@@ -224,7 +224,7 @@ def main() -> int:
                         "image_base64": FAKE_IMAGE_BASE64,
                         "image_type": "image/jpeg",
                     },
-                    "context": {"invoke_id": "test-invoke-complete"},
+                    "context": {"invoke_id": "test-invoke-split"},
                 },
             },
         )
@@ -236,13 +236,11 @@ def main() -> int:
                 "jsonrpc": "2.0",
                 "id": complete_rpc["id"],
                 "result": {
-                    "run_id": "run-fake-2",
-                    "stream_id": "strm-fake-2",
-                    "frames": [
-                        {"event": "delta", "text": simple_text[:half]},
-                        {"event": "delta", "text": simple_text[half:]},
-                        {"event": "complete"},
+                    "content": [
+                        {"type": "text", "text": simple_text[:half]},
+                        {"type": "text", "text": simple_text[half:]},
                     ],
+                    "model": "google/gemini-2.5-flash",
                 },
             },
         )
@@ -251,14 +249,15 @@ def main() -> int:
         assert final["result"]["success"] is True, final
         txns = final["result"]["data"]["transactions"]
         assert len(txns) == 1 and txns[0]["merchant"] == "Test Shop", final
-        print("sentinel 'complete' frame: OK (fell back to accumulated deltas)")
+        print("split text blocks: OK (concatenated across blocks)")
 
         # 5a. image_base64 arrives as a data: URI (the natural shape a browser
         #     file input / Anna App UI FileReader would hand us) -> must be
-        #     stripped to clean base64 before it's forwarded as an attachment,
-        #     and the sanitized (not raw) value must be what agent/complete sees.
-        #     This is the fix for the Anna App Review's Bill Scanner 400:
-        #     "the image payload is not accepted as valid base64 image data."
+        #     stripped to clean base64 before it's forwarded as an image
+        #     content block, and the sanitized (not raw) value must be what
+        #     agent/complete sees. This is the fix for the Anna App Review's
+        #     Bill Scanner 400: "the image payload is not accepted as valid
+        #     base64 image data."
         data_uri = f"data:image/png;base64,{FAKE_IMAGE_BASE64}"
         send(
             proc,
@@ -278,7 +277,12 @@ def main() -> int:
         )
         complete_rpc = recv(proc)
         assert complete_rpc["method"] == "agent/complete", complete_rpc
-        assert complete_rpc["params"]["attachments"][0]["data"] == FAKE_IMAGE_BASE64, (
+        image_blocks = [
+            b
+            for b in complete_rpc["params"]["messages"][0]["content"]
+            if b["type"] == "image"
+        ]
+        assert image_blocks[0]["data"] == FAKE_IMAGE_BASE64, (
             "data: URI prefix must be stripped before forwarding",
             complete_rpc,
         )
@@ -287,14 +291,7 @@ def main() -> int:
             {
                 "jsonrpc": "2.0",
                 "id": complete_rpc["id"],
-                "result": {
-                    "run_id": "run-fake-datauri",
-                    "stream_id": "strm-fake-datauri",
-                    "frames": [
-                        {"event": "final", "text": json.dumps(FAKE_OCR_RESPONSE)}
-                    ],
-                    "final": True,
-                },
+                "result": fake_complete_result(json.dumps(FAKE_OCR_RESPONSE)),
             },
         )
         final = recv(proc)
@@ -326,13 +323,11 @@ def main() -> int:
             "invalid base64: OK (rejected fast with a clear error, no session opened)"
         )
 
-        # 5c. real production failure shape: a provider/routing error (e.g.
-        #     OpenRouter 404 "no endpoints support tool use") rides in on a
-        #     normal event=="sse" frame as a top-level `error` string sibling
-        #     to `choices`, then a stream_end frame, then a raw "[DONE]" --
-        #     none of which carry usable content. Must surface a short,
-        #     diagnosable error, not silently fall through to the generic
-        #     "no usable frame" fallback with the whole response dumped.
+        # 5c. a JSON-RPC error on the agent/complete call itself (the shape
+        #     the "'messages' must be a non-empty array" INVALID_REQUEST
+        #     production failure actually took) must surface as a short,
+        #     diagnosable error via the generic error path, not crash the
+        #     plugin or get silently swallowed.
         send(
             proc,
             {
@@ -345,7 +340,7 @@ def main() -> int:
                         "image_base64": FAKE_IMAGE_BASE64,
                         "image_type": "image/jpeg",
                     },
-                    "context": {"invoke_id": "test-invoke-routing-404"},
+                    "context": {"invoke_id": "test-invoke-invalid-request"},
                 },
             },
         )
@@ -356,42 +351,52 @@ def main() -> int:
             {
                 "jsonrpc": "2.0",
                 "id": complete_rpc["id"],
-                "result": {
-                    "run_id": "run-fake-404",
-                    "stream_id": "strm-fake-404",
-                    "frames": [
-                        {"event": "started"},
-                        {
-                            "event": "run_meta",
-                            "model": "google/gemini-2.5-flash-image",
-                            "provider": "openrouter",
-                        },
-                        {
-                            "event": "sse",
-                            "error": (
-                                "Error code: 404 - {'error': {'message': "
-                                "'No endpoints found that support tool use.'"
-                                "}}"
-                            ),
-                        },
-                        {
-                            "event": "sse",
-                            "event_type": "stream_end",
-                            "reason": "task_failed",
-                        },
-                        {"event": "raw", "text": "[DONE]"},
-                    ],
-                    "final": None,
+                "error": {
+                    "code": -32043,
+                    "message": "'messages' must be a non-empty array",
+                    "data": {"errorCode": "INVALID_REQUEST"},
                 },
             },
         )
         final = recv(proc)
         assert final["id"] == 53, final
         assert final["result"]["success"] is False, final
-        err = final["result"]["error"]
-        assert "No endpoints found that support tool use" in err, err
-        assert len(err) < 300, ("error must stay short, not dump all frames", err)
-        print("routing/provider 404 on an sse frame: OK (short, diagnosable error)")
+        assert "non-empty array" in final["result"]["error"], final
+        print("agent/complete JSON-RPC error: OK (surfaced, not swallowed)")
+
+        # 5d. a response with no text content at all -> must raise a clear
+        #     error instead of silently returning zero transactions.
+        send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 54,
+                "method": "invoke",
+                "params": {
+                    "tool": "extract_transactions",
+                    "arguments": {
+                        "image_base64": FAKE_IMAGE_BASE64,
+                        "image_type": "image/jpeg",
+                    },
+                    "context": {"invoke_id": "test-invoke-empty"},
+                },
+            },
+        )
+        complete_rpc = recv(proc)
+        assert complete_rpc["method"] == "agent/complete", complete_rpc
+        send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": complete_rpc["id"],
+                "result": {"content": [], "model": "google/gemini-2.5-flash"},
+            },
+        )
+        final = recv(proc)
+        assert final["id"] == 54, final
+        assert final["result"]["success"] is False, final
+        assert "no text content" in final["result"]["error"], final
+        print("empty content: OK (raised, not silently zero transactions)")
 
         # 6. health -- executa-lifecycle.md's documented shape
         send(proc, {"jsonrpc": "2.0", "id": 6, "method": "health"})

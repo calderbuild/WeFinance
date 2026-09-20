@@ -5,20 +5,22 @@ Ports services/vision_ocr_service.py's "count first, then extract" Vision OCR
 prompt and its robust JSON parsing / field-fixup logic. Speaks JSON-RPC 2.0
 over stdio (Anna Executa protocol v2).
 
-Unlike wefinance-chat/wefinance-recommend, this Tool does NOT use Sampling
-(sampling/createMessage only accepts text content -- confirmed with Anna's
-team, see annaresearch.md). It uses Anna's Agent Sessions family instead
-(host_capabilities: ["llm.sample", "llm.agent.auto"]), which supports native
-image input via an `attachments` array on the call:
+Unlike wefinance-chat/wefinance-recommend, this Tool does NOT use plain
+Sampling (sampling/createMessage's working shape, per wefinance_chat.py, is
+text-only in practice). It uses Anna's Agent Sessions family instead
+(host_capabilities: ["llm.sample", "llm.agent.auto"]) via agent/complete,
+which supports native image input through MCP-shaped `messages`:
 
-    agent/complete(content=prompt, attachments=[
-        {"type": "image/jpeg", "data": "<base64>", "filename": "receipt.jpg"}
+    agent/complete(messages=[
+        {"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image", "data": "<base64>", "mimeType": "image/jpeg"},
+        ]},
     ])
 
-per developers/apps/llm-and-agent.md section 3.0a and developers/tools/executa-agent.md
-(confirmed 2026-08-09 against staging.anna.partners). This lets the Tool
-avoid shipping its own OPENAI_API_KEY entirely -- the host routes the vision
-call through the user's own plan, same as the other two Tools do for text.
+This lets the Tool avoid shipping its own OPENAI_API_KEY entirely -- the
+host routes the vision call through the user's own plan, same as the other
+two Tools do for text.
 
 History: v0.1.x used a stateful agent/session.create + session.run + delete
 sequence (kind="agent", agent_submode="auto"). That's how Anna's own
@@ -55,16 +57,43 @@ separate dev-only endpoint (POST /api/v1/anna-apps/dev/session/mint), so a
 CLI pass alone doesn't prove anything about this class of bug -- see
 test_local.py and the App Review thread for the real-UI verification.
 
-Wire protocol notes (confirmed, not inferred):
-- Reverse-RPC method: agent/complete. Response is buffered streaming in
-  protocol v2: the host returns {run_id, stream_id, frames: [...], final}
-  rather than a single text blob like sampling's response. The answer text
-  lives on the frame with event == "final" -- and per the shipped reference
-  plugin (examples/python/executa-agent-demo), a run can also terminate on a
-  sentinel-only event == "complete" frame with no text at all, in which case
-  the answer is whatever "delta"/"token"/"message" frames were accumulated
-  along the way. Handle both, or a model that streams tokens and terminates
-  via "complete" would silently return zero transactions.
+v0.2.0's real bug (confirmed by Anna's team, 2026-09-20 forum reply): the
+Developer Console's Install/reinstall only registers the app on the
+account -- it never pushes bundled executa binaries to the agent. So every
+v0.1.x/v0.2.0 build sat published and "current" per `executa status` and
+local `describe` while the agent kept running the original v0.1.8 binary
+all week. That's why three independent fixes "changed nothing" -- none of
+them ever actually ran. Deploying a new build now requires an explicit push
+via /executa (Executa Hub) -> My Tools -> Install on the target agent, on
+top of the publish/cut/submit-review pipeline.
+
+v0.2.1 also fixes a second bug agent/complete inherited from v0.1.x: the
+modelPreferences hint "gemini" was resolving to google/gemini-2.5-flash-image,
+which is an image-*generation* model, not a vision-input one. Hinting a real
+vision-capable text model (gemini-2.5-flash) instead.
+
+v0.2.1's remaining bug, found once the real v0.2.1 binary was finally
+running on the agent (see above): agent/complete's actual params are
+`content`/`attachments` -- an invented shape, guessed by analogy to
+session.create, that never matched any documented field. It surfaced as a
+live "'messages' must be a non-empty array" INVALID_REQUEST (-32043), since
+the host silently ignored the unrecognized params and defaulted the real
+required field to empty. Fixed by reading
+reference-executa-agent-sessions.json's actual `agent/complete` param list
+directly: `messages: list[dict]` (required, MCP-shaped `{role, content}`,
+"multimodal content blocks accepted verbatim"), plus optional maxTokens/
+modelPreferences/systemPrompt/temperature/stopSequences/metadata. No
+`content`/`attachments` params exist at all.
+
+Wire protocol notes (confirmed via reference-executa-agent-sessions.json,
+not inferred):
+- Reverse-RPC method: agent/complete. NOT buffered streaming (wire.
+  buffered_streaming: false) -- returned verbatim from
+  /copilot/app/complete as {content, model, usage}. `content` is a list of
+  blocks (typically [{type: "text", text: ...}]), the same content-block
+  family as sampling/createMessage's response but as a list instead of a
+  single object (wefinance_chat.py's `result["content"]["text"]` does NOT
+  apply here).
 - modelPreferences (to force a vision-capable model, avoiding
   APP_MODEL_NOT_VISION_CAPABLE) is a param on the call itself.
 - initialize()'s "capabilities" key (not "client_capabilities") is confirmed
@@ -89,7 +118,7 @@ from datetime import date, datetime
 MANIFEST = {
     "name": "wefinance-ocr",
     "display_name": "WeFinance Bill Scanner",
-    "version": "0.2.0",
+    "version": "0.2.2",
     "description": "Extract structured transactions from a photo of a bill, receipt, or payment screenshot.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample", "llm.agent.auto"],
@@ -110,12 +139,6 @@ MANIFEST = {
                     "type": "string",
                     "description": "MIME type of the image, e.g. image/jpeg, image/png.",
                     "required": True,
-                },
-                {
-                    "name": "filename",
-                    "type": "string",
-                    "description": "Original filename, used only as an attachment label. Optional.",
-                    "required": False,
                 },
             ],
         }
@@ -453,7 +476,7 @@ def _call(method: str, params: dict, timeout: float) -> dict:
     return resp["result"]
 
 
-def complete(invoke_id: str, content: str, attachments: list) -> str:
+def complete(invoke_id: str, prompt: str, image_base64: str, image_type: str) -> str:
     if not v2_negotiated:
         raise RuntimeError(
             "Agent Sessions unavailable: host did not negotiate protocol v2 for this session."
@@ -461,11 +484,35 @@ def complete(invoke_id: str, content: str, attachments: list) -> str:
     result = _call(
         "agent/complete",
         {
-            "content": content,
-            "attachments": attachments,
-            # vision-capable model required or the run fails fast with
-            # APP_MODEL_NOT_VISION_CAPABLE (no silent fallback).
-            "modelPreferences": {"hints": [{"name": "gemini"}]},
+            # Real schema (confirmed 2026-09-20 against
+            # reference-executa-agent-sessions.json's session_create "messages"
+            # param, after `content`/`attachments` -- an invented shape that
+            # never matched any documented field -- caused a live
+            # "'messages' must be a non-empty array" INVALID_REQUEST). MCP-shaped
+            # messages, mirroring wefinance_chat.py's working
+            # sampling/createMessage call: {role, content}, content a single
+            # block or (per "multimodal content blocks are accepted verbatim")
+            # a list of blocks for one message.
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image",
+                            "data": image_base64,
+                            "mimeType": image_type,
+                        },
+                    ],
+                }
+            ],
+            "maxTokens": 4000,
+            # vision-capable TEXT model required. A bare "gemini" hint
+            # resolved to google/gemini-2.5-flash-image (an image-generation
+            # model with almost no tool-use-compatible routing options,
+            # confirmed by Anna's team 2026-09-20) -- name the text model
+            # explicitly instead of a generic family hint.
+            "modelPreferences": {"hints": [{"name": "gemini-2.5-flash"}]},
             "metadata": {"executa_invoke_id": invoke_id},
         },
         # executa-lifecycle.md documents a 60s default invoke budget, but the
@@ -477,53 +524,24 @@ def complete(invoke_id: str, content: str, attachments: list) -> str:
         # which one actually governs.
         timeout=90,
     )
-    # Buffered streaming (v2): host accumulates SSE frames and returns
-    # {run_id, stream_id, frames: [...], final}. The answer is on the
-    # terminal frame -- either event=="final" (text, or empty if the
-    # producer only emitted deltas) or a sentinel-only event=="complete"
-    # with no text at all (shipped reference plugin's documented pattern).
-    # Accumulate delta/token/message text along the way as a fallback so
-    # neither terminal shape silently returns empty.
-    deltas: list = []
-    final_text = ""
-    for frame in result.get("frames", []):
-        ev = frame.get("event")
-        if ev == "sse":
-            # Real host shape (not documented in executa-lifecycle.md's worked
-            # example): each 'sse' frame wraps an OpenAI-style streaming chat
-            # completion delta -- content text lives at
-            # choices[0].delta.content, alongside control-only deltas like
-            # task_info/processing_started/task_complete that carry no text.
-            # A routing/provider failure (e.g. OpenRouter 404 "no endpoints
-            # support tool use") also rides in on an 'sse' frame, as a
-            # top-level `error` string sibling to `choices` -- confirmed from
-            # a real production failure where this went unhandled and the
-            # whole 7-frame response got dumped as "no usable frame" instead.
-            if frame.get("error"):
-                raise RuntimeError(
-                    f"scanning backend rejected the run: {frame['error']}"
-                )
-            for choice in frame.get("choices") or []:
-                delta_content = (choice.get("delta") or {}).get("content")
-                if isinstance(delta_content, str) and delta_content:
-                    deltas.append(delta_content)
-        elif ev in ("delta", "token", "message"):
-            txt = frame.get("text") or ""
-            if txt:
-                deltas.append(txt)
-        elif ev == "final":
-            final_text = (frame.get("text") or "").strip() or "".join(deltas)
-        elif ev == "complete":
-            if not final_text:
-                final_text = "".join(deltas)
-    if final_text:
-        return final_text
-    final = result.get("final")
-    if isinstance(final, dict) and final.get("text"):
-        return final["text"]
-    if deltas:
-        return "".join(deltas)
-    raise RuntimeError(f"agent/complete returned no usable frame: {result!r}")
+    # Not buffered streaming -- confirmed via reference doc's
+    # wire.buffered_streaming: false. Returned verbatim from
+    # /copilot/app/complete as {content, model, usage}, content a list of
+    # blocks (typically [{type: 'text', text: ...}]), matching
+    # sampling/createMessage's shape family but as a list instead of a single
+    # object.
+    blocks = result.get("content") or []
+    if isinstance(blocks, dict):
+        blocks = [blocks]
+    texts = [
+        b.get("text", "")
+        for b in blocks
+        if isinstance(b, dict) and b.get("type") == "text"
+    ]
+    text = "".join(texts).strip()
+    if text:
+        return text
+    raise RuntimeError(f"agent/complete returned no text content: {result!r}")
 
 
 # --- Image payload sanitization ----------------------------------------------
@@ -560,23 +578,11 @@ def _validate_base64_image(image_base64: str) -> str:
 # --- Tool logic --------------------------------------------------------------
 
 
-def extract_transactions(
-    invoke_id: str, image_base64: str, image_type: str, filename: str
-) -> list:
+def extract_transactions(invoke_id: str, image_base64: str, image_type: str) -> list:
     image_base64 = _validate_base64_image(image_base64)
     source_hash = hashlib.sha256(image_base64.encode("utf-8")).hexdigest()
 
-    raw_text = complete(
-        invoke_id,
-        OCR_PROMPT,
-        [
-            {
-                "type": image_type,
-                "data": image_base64,
-                "filename": filename or "receipt.jpg",
-            }
-        ],
-    )
+    raw_text = complete(invoke_id, OCR_PROMPT, image_base64, image_type)
 
     parsed = _robust_json_parse(raw_text)
     declared = parsed["transaction_count"]
@@ -648,7 +654,6 @@ def handle(req: dict) -> dict:
 
         image_base64 = args.get("image_base64", "")
         image_type = args.get("image_type", "")
-        filename = args.get("filename", "")
 
         if not image_base64 or not image_type:
             return {
@@ -661,9 +666,7 @@ def handle(req: dict) -> dict:
             }
 
         try:
-            transactions = extract_transactions(
-                invoke_id, image_base64, image_type, filename
-            )
+            transactions = extract_transactions(invoke_id, image_base64, image_type)
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
