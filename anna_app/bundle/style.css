@@ -123,6 +123,17 @@ button:disabled {
   color: var(--danger);
 }
 
+.btn-ghost-danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+.btn-ghost-danger:hover {
+  background: rgba(224, 97, 107, 0.12);
+  color: var(--danger);
+}
+
 .txn-table {
   width: 100%;
   border-collapse: collapse;

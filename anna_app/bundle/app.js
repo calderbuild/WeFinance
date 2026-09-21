@@ -230,9 +230,23 @@ function setupTabs() {
   });
 }
 
+async function clearTransactions() {
+  state.transactions = [];
+  renderTransactionTable(state.transactions);
+  refreshTransactionCounts();
+  renderOverview();
+  await persistTransactions();
+}
+
 function setupScanPanel() {
   const fileInput = document.getElementById("scan-file");
   const statusEl = document.getElementById("scan-status");
+  const clearBtn = document.getElementById("clear-transactions");
+
+  clearBtn.addEventListener("click", async () => {
+    await clearTransactions();
+    setStatus(statusEl, "Cleared all scanned transactions.");
+  });
 
   fileInput.addEventListener("change", async () => {
     const file = fileInput.files?.[0];
@@ -244,7 +258,6 @@ function setupScanPanel() {
       const data = await callTool(TOOL_IDS.ocr, "extract_transactions", {
         image_base64: imageBase64,
         image_type: file.type || "image/jpeg",
-        filename: file.name,
       });
       const newTxns = data.transactions || [];
       state.transactions = state.transactions.concat(newTxns);
