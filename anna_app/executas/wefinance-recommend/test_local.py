@@ -41,9 +41,9 @@ def test_friendly_sampling_error_surfaces_provider_detail() -> None:
         }
     )
     assert "bad json_schema mode" in friendly, friendly
-    assert "LLM provider had an error" in friendly, (
-        friendly
-    )  # still human-friendly, not raw dump
+    assert (
+        "LLM provider had an error" in friendly
+    ), friendly  # still human-friendly, not raw dump
     print("friendly_sampling_error surfaces provider detail: OK")
 
 
@@ -57,7 +57,9 @@ def test_sampling_timeout_produces_diagnosable_message() -> None:
     module.v2_negotiated = True  # type: ignore[attr-defined]
 
     class InstantEmptyQueue:
-        def get(self, timeout=None):  # noqa: ARG002 -- must match real Queue.get's kwarg name
+        def get(
+            self, timeout=None
+        ):  # noqa: ARG002 -- must match real Queue.get's kwarg name
             raise queue.Empty()
 
         def put(self, *_args, **_kwargs):
@@ -191,6 +193,8 @@ def main() -> int:
         rf = reverse_rpc["params"]["responseFormat"]
         assert rf["type"] == "json_schema", rf
         assert rf["json_schema"]["name"] == "wefinance_recommendations", rf
+        hints = [h["name"] for h in reverse_rpc["params"]["modelPreferences"]["hints"]]
+        assert hints == ["gemini", "gpt"], hints
         # sanity: the prompt should reference the real computed monthly average
         # (540/2 months = 270 dining + 40 transit -> monthly_average ~= 310)
         prompt_text = reverse_rpc["params"]["messages"][0]["content"]["text"]

@@ -23,7 +23,7 @@ from collections import defaultdict
 MANIFEST = {
     "name": "wefinance-recommend",
     "display_name": "WeFinance Investment Recommendations",
-    "version": "0.1.7",
+    "version": "0.1.8",
     "description": "Generate explainable investment recommendations grounded in the user's real spending data.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample"],
@@ -330,6 +330,13 @@ def _request_structured_completion(
                     "json_schema": RECOMMENDATIONS_SCHEMA,
                 },
                 "onUnsupported": "json_object",
+                # Without a hint the host picks the user's default model. On
+                # 2026-09-22 that was qwen3.7-plus: 50-58s and an empty reply
+                # for this prompt, long enough that the cloud agent's sampling
+                # call came back as HTTP 502. Same prompt, same host: gemini
+                # 8.8s, gpt 16.4s, claude 30.7s. Hints resolve in order, so
+                # gpt only takes over if the host stops offering gemini.
+                "modelPreferences": {"hints": [{"name": "gemini"}, {"name": "gpt"}]},
                 "metadata": {"executa_invoke_id": invoke_id},
             },
         }
