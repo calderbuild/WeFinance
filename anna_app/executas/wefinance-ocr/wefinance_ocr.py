@@ -5,97 +5,39 @@ Ports services/vision_ocr_service.py's "count first, then extract" Vision OCR
 prompt and its robust JSON parsing / field-fixup logic. Speaks JSON-RPC 2.0
 over stdio (Anna Executa protocol v2).
 
-Unlike wefinance-chat/wefinance-recommend, this Tool does NOT use plain
-Sampling (sampling/createMessage's working shape, per wefinance_chat.py, is
-text-only in practice). It uses Anna's Agent Sessions family instead
-(host_capabilities: ["llm.sample", "llm.agent.auto"]) via agent/complete,
-which supports native image input through MCP-shaped `messages`:
+The image goes to the model through Anna's Agent Sessions family
+(host_capabilities: ["llm.sample", "llm.agent.auto"]):
 
-    agent/complete(messages=[
-        {"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image", "data": "<base64>", "mimeType": "image/jpeg"},
-        ]},
-    ])
+    agent/session.create(agent_submode="auto")
+    agent/session.run(content=prompt, allowed_tools=[],
+                      attachments=[{"type": "image/png", "data": "<base64>",
+                                    "filename": "bill.png"}])
+    agent/session.delete(...)
 
-This lets the Tool avoid shipping its own OPENAI_API_KEY entirely -- the
-host routes the vision call through the user's own plan, same as the other
-two Tools do for text.
+`attachments` on session.run is the only image input Anna documents
+(llm-and-agent.md section 3.0a, "the same field works on the plugin path").
+agent/complete (v0.2.0-v0.2.2) does NOT carry images: calling
+/copilot/app/complete directly on 2026-09-22 with the image as an MCP
+`{type: image, data, mimeType}` block, an OpenAI `image_url` block and an
+Anthropic `source` block all returned "no image visible", and the
+gemini-2.5-flash hint was routed to google/gemini-2.5-flash-image anyway.
+The model answered the prompt blind, which is how a US card statement came
+back as invented CNY convenience-store rows, or as zero transactions.
 
-History: v0.1.x used a stateful agent/session.create + session.run + delete
-sequence (kind="agent", agent_submode="auto"). That's how Anna's own
-reference plugin does it, but it kept 404ing in production with "No
-endpoints found that support tool use": OpenRouter routes any session with
-granted tools to tool-use-capable endpoints, and the vision model we get
-hinted to (gemini-2.5-flash-image) has none. v0.1.9 tried to opt out via
-quotaCaps.inherit_host_tools: false on session.create -- shipped, verified
-through the CLI dev-harness, and still failed identically on three
-consecutive real Chrome-UI retests (run_meta kept reporting
-inherit_host_tools: True / granted_tools: ["*"] regardless of what the
-create call asked for).
+Same probe against /copilot/app/agent with `attachments` read every merchant
+and amount correctly (google/gemini-3-flash-preview under the "gemini" hint,
+qwen3.7-plus with no hint). allowed_tools=[] keeps the run a pure model
+reply: v0.1.x never passed it and died with OpenRouter's "No endpoints found
+that support tool use" once tools were inherited.
 
-Root cause (confirmed by reading reference-executa-agent-sessions.json
-directly, not guessed): quotaCaps/inherit_host_tools/allowed_tools/
-granted_tools are ONLY documented under the Host API's agent.session.create
-(the App's own iframe JS, postMessage transport) -- NOT under this Tool's
-reverse-RPC agent/session.create, whose reference entry says nothing about
-tool-grant control beyond "Identity is derived from the sampling_token --
-the plugin cannot override it." The Host API docs even say allowed_tools
-only narrows "sandbox sessions only" -- if the grant behind a session was
-never sandboxed, no per-call param changes that. There is no documented way
-for a stdio Tool to opt out of tool inheritance via session.create.
+Deploying: publish/cut/submit-review only registers a build. The agent keeps
+running its old binary until Executa Hub -> My Tools -> Install pushes it.
 
-v0.2.0 switches to agent/complete: "L1 one-shot completion... sugar for
-plugins that don't need state" (same host_capabilities grant, same auth
-chain as agent/session.*, "same wire frames" per the reference docs). Bill
-Scanner only ever needs one completion per invoke, so this avoids creating
-a stateful, tool-using Agent Session in the first place -- sidestepping the
-tool-inheritance question by construction instead of by an unsupported
-parameter. This was unverified until tested against the real Chrome UI: the
-CLI dev-harness's --agent-account path was later found to mint tokens via a
-separate dev-only endpoint (POST /api/v1/anna-apps/dev/session/mint), so a
-CLI pass alone doesn't prove anything about this class of bug -- see
-test_local.py and the App Review thread for the real-UI verification.
-
-v0.2.0's real bug (confirmed by Anna's team, 2026-09-20 forum reply): the
-Developer Console's Install/reinstall only registers the app on the
-account -- it never pushes bundled executa binaries to the agent. So every
-v0.1.x/v0.2.0 build sat published and "current" per `executa status` and
-local `describe` while the agent kept running the original v0.1.8 binary
-all week. That's why three independent fixes "changed nothing" -- none of
-them ever actually ran. Deploying a new build now requires an explicit push
-via /executa (Executa Hub) -> My Tools -> Install on the target agent, on
-top of the publish/cut/submit-review pipeline.
-
-v0.2.1 also fixes a second bug agent/complete inherited from v0.1.x: the
-modelPreferences hint "gemini" was resolving to google/gemini-2.5-flash-image,
-which is an image-*generation* model, not a vision-input one. Hinting a real
-vision-capable text model (gemini-2.5-flash) instead.
-
-v0.2.1's remaining bug, found once the real v0.2.1 binary was finally
-running on the agent (see above): agent/complete's actual params are
-`content`/`attachments` -- an invented shape, guessed by analogy to
-session.create, that never matched any documented field. It surfaced as a
-live "'messages' must be a non-empty array" INVALID_REQUEST (-32043), since
-the host silently ignored the unrecognized params and defaulted the real
-required field to empty. Fixed by reading
-reference-executa-agent-sessions.json's actual `agent/complete` param list
-directly: `messages: list[dict]` (required, MCP-shaped `{role, content}`,
-"multimodal content blocks accepted verbatim"), plus optional maxTokens/
-modelPreferences/systemPrompt/temperature/stopSequences/metadata. No
-`content`/`attachments` params exist at all.
-
-Wire protocol notes (confirmed via reference-executa-agent-sessions.json,
-not inferred):
-- Reverse-RPC method: agent/complete. NOT buffered streaming (wire.
-  buffered_streaming: false) -- returned verbatim from
-  /copilot/app/complete as {content, model, usage}. `content` is a list of
-  blocks (typically [{type: "text", text: ...}]), the same content-block
-  family as sampling/createMessage's response but as a list instead of a
-  single object (wefinance_chat.py's `result["content"]["text"]` does NOT
-  apply here).
-- modelPreferences (to force a vision-capable model, avoiding
-  APP_MODEL_NOT_VISION_CAPABLE) is a param on the call itself.
+Wire protocol notes:
+- session.run is buffered streaming: the host returns {run_id, stream_id,
+  frames, final} once the run ends. Text arrives as 'sse' frames wrapping
+  OpenAI-style chunks (choices[0].delta.content); a provider failure rides
+  in on an 'sse' frame as a top-level `error` string.
 - initialize()'s "capabilities" key (not "client_capabilities") is confirmed
   correct -- see wefinance_chat.py's module docstring for the full reasoning;
   same applies here, extended with an empty "agent": {} entry since this tool
@@ -118,7 +60,7 @@ from datetime import date, datetime
 MANIFEST = {
     "name": "wefinance-ocr",
     "display_name": "WeFinance Bill Scanner",
-    "version": "0.2.2",
+    "version": "0.2.3",
     "description": "Extract structured transactions from a photo of a bill, receipt, or payment screenshot.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample", "llm.agent.auto"],
@@ -151,69 +93,31 @@ TYPO_FIELD_MAP = {
     "catagory": "category",
 }
 
-OCR_PROMPT = """你是一个专业的财务账单识别助手。请仔细分析这张账单图片，提取所有交易记录。
+# English prompt + English categories: the App UI and its "Other" fallbacks
+# (app.js, wefinance-recommend) are English. The example uses a placeholder
+# merchant on purpose -- a realistic one gets echoed back when the model
+# can't read the image.
+OCR_PROMPT = """You extract transactions from financial documents. Read the attached image (a bill, receipt, bank or card statement, or payment screenshot) and extract every transaction in it.
 
-【核心识别规则】：
-★ 首先统计图片中有多少笔交易（有几行独立金额就有几笔交易）
-★ 然后逐行提取每一笔的详细信息，确保 transactions 数组长度 = transaction_count
-★ 如看到合计行，仅用于验证总额，不作为单独交易计数
+Rules:
+1. First count the transactions: each separate line with its own amount is one transaction. Then extract each one, so the length of "transactions" equals "transaction_count".
+2. Total, subtotal, balance and payment-due lines are only for cross-checking. Never report them as transactions.
+3. Report only what is actually visible in the image. Never invent merchants, dates or amounts.
+4. If no image is attached or you cannot read it, return exactly {"transaction_count": 0, "transactions": [], "error": "no_image"}.
 
-多语言处理规则：
-1. **语言识别**：
-   - 如果账单为韩文/日文/泰文等非中英文：
-     * 商户名保留原文（不要翻译）
-     * 金额(amount)和分类(category)必须提取
-     * 如果有英文字段，优先使用英文值
-   - 如果账单为中文/英文：正常提取所有字段
+Fields for each transaction:
+- date: YYYY-MM-DD, or null if the image doesn't show one. Today's date is given at the end of this message. Resolve relative dates ("today", "yesterday", a weekday name) against it. If the year isn't shown, use the most recent year that doesn't put the date after today, and list "date" in inferred_fields.
+- merchant: the merchant or payee exactly as written, in its original language (do not translate); "Unknown Merchant" if none is shown
+- category: one of Dining, Groceries, Transport, Shopping, Entertainment, Healthcare, Education, Housing, Utilities, Other
+- amount: a number without currency symbols. Money spent is positive. Refunds and other money coming back to the payer (shown with "+", or labelled refund / 退款) are negative, so they cancel the original purchase.
+- currency: ISO 4217 code. "$" means USD unless marked otherwise ("S$" is SGD, "HK$" is HKD); "¥", "元" or "RMB" means CNY; "RM" means MYR; "฿" means THB; "₩" means KRW; "€" means EUR; "£" means GBP. With no symbol, infer it from the document's language and country.
+- partial_data: true if any field was inferred rather than read from the image
+- inferred_fields: names of the inferred fields, e.g. ["category"]
 
-2. **字段容错策略**：
-   - date缺失 → 尝试从receipt_time推断，或设为null（但标记partial_data=true）
-   - merchant缺失 → 从票据抬头/店铺名提取，找不到则设为"Unknown Merchant"
-   - category缺失 → 根据商品明细智能推断（食品→餐饮，服装→购物，交通卡→交通）
-   - **即使部分字段缺失，也要返回数据，不要直接返回空数组[]**
+Return a single JSON object and nothing else (no markdown code fences):
+{"transaction_count": 1, "transactions": [{"date": "2026-01-01", "merchant": "Example Store", "category": "Shopping", "amount": 10.0, "currency": "USD", "partial_data": false, "inferred_fields": []}]}
 
-3. **货币识别增强**：
-   - RM 或 MYR → "MYR"（马来西亚林吉特）
-   - ฿ 或 THB → "THB"（泰铢）
-   - ₩ 或 KRW → "KRW"（韩元）
-   - ¥ → "CNY"（人民币）
-   - $ → "USD"（美元，但S$为SGD新加坡元）
-   - 无符号且无法判断 → 默认"CNY"
-
-4. **提取字段**：
-   - date: 日期（YYYY-MM-DD格式）或 null
-   - merchant: 商户名称（保持原文）或 "Unknown Merchant"
-   - category: 分类（餐饮、交通、购物、娱乐、医疗、教育、其他）
-   - amount: 总金额（数字，不带货币符号，必需）
-   - currency: 货币代码（见上述规则）
-   - partial_data: 布尔值（如果有字段被推断，设为true）
-   - inferred_fields: 数组（列出哪些字段是推断的，如 ["date", "merchant"]）
-
-5. **详细收据字段**（可选）：
-   - line_items: 商品明细数组
-   - subtotal: 小计
-   - total_discount: 总折扣金额
-   - receipt_number: 收据编号
-
-返回格式（纯JSON对象，不要markdown代码块）：
-{
-  "transaction_count": 4,
-  "transactions": [
-    {
-      "date": "2025-11-01",
-      "merchant": "星巴克",
-      "category": "餐饮",
-      "amount": 45.0,
-      "currency": "CNY",
-      "partial_data": false,
-      "inferred_fields": []
-    }
-  ]
-}
-
-如果图片中没有交易记录，返回：{"transaction_count": 0, "transactions": []}
-
-重要：即使部分字段缺失，也要尝试返回部分数据，并标记inferred_fields。"""
+If the image shows no transactions, return {"transaction_count": 0, "transactions": []}."""
 
 
 # --- JSON parsing / field fixup (ported from vision_ocr_service.py, no
@@ -259,7 +163,7 @@ def _fix_entries(items) -> list:
 
 
 def _robust_json_parse(content: str) -> dict:
-    """Returns {"transaction_count": int, "transactions": [...]}."""
+    """Returns {"transaction_count": int, "transactions": [...], "error": str|None}."""
 
     text = _strip_markdown_fences(content or "")
 
@@ -271,6 +175,7 @@ def _robust_json_parse(content: str) -> dict:
                     "transaction_count", len(direct["transactions"])
                 ),
                 "transactions": _fix_entries(direct["transactions"]),
+                "error": direct.get("error"),
             }
         return {"transaction_count": len(direct), "transactions": _fix_entries(direct)}
 
@@ -298,8 +203,9 @@ def _robust_json_parse(content: str) -> dict:
         rows = fallback if isinstance(fallback, list) else fallback["transactions"]
         return {"transaction_count": len(rows), "transactions": _fix_entries(rows)}
 
-    print(f"JSON parse failed, raw snippet: {text[:200]}", file=sys.stderr)
-    return {"transaction_count": 0, "transactions": []}
+    # Raise instead of returning []: a non-JSON reply (e.g. "I can't see an
+    # image") used to surface as "No transactions found in that image."
+    raise RuntimeError(f"Bill Scanner couldn't parse the model's reply: {text[:200]!r}")
 
 
 _DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%m/%d/%Y", "%d/%m/%Y")
@@ -363,7 +269,7 @@ def _validate_and_fix_transaction(item: dict, idx: int, source_hash: str):
 
     payload["date"] = _parse_date(payload.get("date"))
     payload.setdefault("currency", "CNY")
-    payload.setdefault("category", "其他")
+    payload.setdefault("category", "Other")
     payload.setdefault("line_items", [])
 
     if not payload.get("id"):
@@ -476,76 +382,81 @@ def _call(method: str, params: dict, timeout: float) -> dict:
     return resp["result"]
 
 
-def complete(invoke_id: str, prompt: str, image_base64: str, image_type: str) -> str:
+def create_session() -> str:
     if not v2_negotiated:
         raise RuntimeError(
             "Agent Sessions unavailable: host did not negotiate protocol v2 for this session."
         )
     result = _call(
-        "agent/complete",
+        "agent/session.create",
         {
-            # Real schema (confirmed 2026-09-20 against
-            # reference-executa-agent-sessions.json's session_create "messages"
-            # param, after `content`/`attachments` -- an invented shape that
-            # never matched any documented field -- caused a live
-            # "'messages' must be a non-empty array" INVALID_REQUEST). MCP-shaped
-            # messages, mirroring wefinance_chat.py's working
-            # sampling/createMessage call: {role, content}, content a single
-            # block or (per "multimodal content blocks are accepted verbatim")
-            # a list of blocks for one message.
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image",
-                            "data": image_base64,
-                            "mimeType": image_type,
-                        },
-                    ],
-                }
-            ],
-            "maxTokens": 4000,
-            # vision-capable TEXT model required. A bare "gemini" hint
-            # resolved to google/gemini-2.5-flash-image (an image-generation
-            # model with almost no tool-use-compatible routing options,
-            # confirmed by Anna's team 2026-09-20) -- name the text model
-            # explicitly instead of a generic family hint.
-            "modelPreferences": {"hints": [{"name": "gemini-2.5-flash"}]},
-            "metadata": {"executa_invoke_id": invoke_id},
+            "agent_submode": "auto",
+            "label": "WeFinance Bill Scanner",
+            "ttl_seconds": 300,
         },
-        # executa-lifecycle.md documents a 60s default invoke budget, but the
-        # shipped reference plugin waits up to 180s for its own agent runs --
-        # a real, unresolved conflict between the two authoritative-looking
-        # sources. Vision extraction is plausibly slower than plain sampling,
-        # so we lean toward the reference's number here rather than risk
-        # truncating legitimate slow runs; revisit once a real host confirms
-        # which one actually governs.
+        timeout=25,
+    )
+    return result["app_session_uuid"]
+
+
+def run_session(app_session_uuid: str, prompt: str, attachment: dict) -> str:
+    result = _call(
+        "agent/session.run",
+        {
+            "app_session_uuid": app_session_uuid,
+            "content": prompt,
+            "attachments": [attachment],
+            # Pure model reply: no tool calls, so no tool-use-only routing.
+            "allowed_tools": [],
+            "recursion_limit": 2,
+            # "gemini" is the vision hint llm-and-agent.md itself uses; it
+            # routed to google/gemini-3-flash-preview in the 2026-09-22 probe.
+            "modelPreferences": {"hints": [{"name": "gemini"}]},
+        },
+        # executa-lifecycle.md documents a 60s default invoke budget; the
+        # shipped reference plugin waits up to 180s for its agent runs.
         timeout=90,
     )
-    # Not buffered streaming -- confirmed via reference doc's
-    # wire.buffered_streaming: false. Returned verbatim from
-    # /copilot/app/complete as {content, model, usage}, content a list of
-    # blocks (typically [{type: 'text', text: ...}]), matching
-    # sampling/createMessage's shape family but as a list instead of a single
-    # object.
-    blocks = result.get("content") or []
-    if isinstance(blocks, dict):
-        blocks = [blocks]
-    texts = [
-        b.get("text", "")
-        for b in blocks
-        if isinstance(b, dict) and b.get("type") == "text"
-    ]
-    text = "".join(texts).strip()
-    if text:
-        return text
-    raise RuntimeError(f"agent/complete returned no text content: {result!r}")
+    deltas: list = []
+    final_text = ""
+    for frame in result.get("frames", []):
+        ev = frame.get("event")
+        if frame.get("error"):
+            raise RuntimeError(f"scanning backend rejected the run: {frame['error']}")
+        if ev == "sse":
+            for choice in frame.get("choices") or []:
+                delta_content = (choice.get("delta") or {}).get("content")
+                if isinstance(delta_content, str) and delta_content:
+                    deltas.append(delta_content)
+        elif ev in ("delta", "token", "message"):
+            txt = frame.get("text") or ""
+            if txt:
+                deltas.append(txt)
+        elif ev == "final":
+            final_text = (frame.get("text") or "").strip() or "".join(deltas)
+    if final_text:
+        return final_text
+    final = result.get("final")
+    if isinstance(final, dict) and final.get("text"):
+        return final["text"]
+    if deltas:
+        return "".join(deltas)
+    raise RuntimeError(f"agent/session.run returned no text: {result!r}"[:500])
+
+
+def close_session(app_session_uuid: str) -> None:
+    try:
+        _call(
+            "agent/session.delete", {"app_session_uuid": app_session_uuid}, timeout=10
+        )
+    except Exception as exc:  # noqa: BLE001
+        # The host expires the session on its own TTL; a failed delete must
+        # not turn a successful scan into an error.
+        print(f"session.delete failed (non-fatal): {exc}", file=sys.stderr)
 
 
 # --- Image payload sanitization ----------------------------------------------
-# The Anna host rejects agent/complete's attachments[].data with a 400 if it
+# The Anna host rejects session.run's attachments[].data with a 400 if it
 # isn't clean base64. Callers (the Anna App UI, a browser file input, etc.) may
 # naturally hand us a full `data:image/jpeg;base64,...` URI or base64 wrapped
 # with newlines -- neither is clean base64, and the host's rejection surfaces
@@ -578,13 +489,28 @@ def _validate_base64_image(image_base64: str) -> str:
 # --- Tool logic --------------------------------------------------------------
 
 
-def extract_transactions(invoke_id: str, image_base64: str, image_type: str) -> list:
+def extract_transactions(image_base64: str, image_type: str) -> list:
     image_base64 = _validate_base64_image(image_base64)
     source_hash = hashlib.sha256(image_base64.encode("utf-8")).hexdigest()
+    extension = image_type.split("/")[-1].split("+")[0] or "jpg"
+    attachment = {
+        "type": image_type,
+        "data": image_base64,
+        "filename": f"bill.{extension}",
+    }
 
-    raw_text = complete(invoke_id, OCR_PROMPT, image_base64, image_type)
+    app_session_uuid = create_session()
+    try:
+        prompt = f"{OCR_PROMPT}\n\nToday's date: {date.today().isoformat()}"
+        raw_text = run_session(app_session_uuid, prompt, attachment)
+    finally:
+        close_session(app_session_uuid)
 
     parsed = _robust_json_parse(raw_text)
+    if parsed.get("error") == "no_image":
+        raise RuntimeError(
+            "The scanning model reported it could not see the image. Please try again."
+        )
     declared = parsed["transaction_count"]
     rows = parsed["transactions"]
     if declared != len(rows):
@@ -642,8 +568,6 @@ def handle(req: dict) -> dict:
         params = req.get("params") or {}
         tool = params.get("tool")
         args = params.get("arguments") or {}
-        ctx = params.get("context") or {}
-        invoke_id = str(ctx.get("invoke_id") or req_id)
 
         if tool != "extract_transactions":
             return {
@@ -666,7 +590,7 @@ def handle(req: dict) -> dict:
             }
 
         try:
-            transactions = extract_transactions(invoke_id, image_base64, image_type)
+            transactions = extract_transactions(image_base64, image_type)
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
