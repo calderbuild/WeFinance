@@ -90,13 +90,35 @@ function monthKey(dateStr) {
   return typeof dateStr === "string" ? dateStr.slice(0, 7) : "";
 }
 
-function formatMoney(amount) {
+function formatMoney(amount, currency) {
   const value = Number(amount || 0);
-  const sign = value < 0 ? "-" : "";
-  return `${sign}$${Math.abs(value).toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  })}`;
+  try {
+    return value.toLocaleString(undefined, {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    });
+  } catch {
+    // Not an ISO 4217 code this browser knows: show the code, don't guess a symbol.
+    return `${Math.round(value).toLocaleString()} ${currency}`;
+  }
+}
+
+function currencySymbol(currency) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency })
+      .formatToParts(0)
+      .find((p) => p.type === "currency").value;
+  } catch {
+    return currency;
+  }
+}
+
+function mostCommon(values) {
+  const counts = new Map();
+  for (const v of values) counts.set(v, (counts.get(v) || 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
 }
 
 function formatMonthLabel(key) {
@@ -106,7 +128,7 @@ function formatMonthLabel(key) {
   return date.toLocaleDateString(undefined, { month: "short", year: "numeric" });
 }
 
-function renderBarList(container, rows) {
+function renderBarList(container, rows, currency) {
   container.innerHTML = "";
   if (!rows.length) {
     container.innerHTML = `<p class="hint">No spending recorded yet.</p>`;
@@ -120,7 +142,7 @@ function renderBarList(container, rows) {
     el.innerHTML = `
       <div class="bar-row-label">${row.label}</div>
       <div class="bar-track"><div class="bar-fill" style="width: ${pct}%"></div></div>
-      <div class="bar-row-value">${formatMoney(row.amount)}</div>
+      <div class="bar-row-value">${formatMoney(row.amount, currency)}</div>
     `;
     container.appendChild(el);
   }
@@ -147,7 +169,22 @@ function renderOverview() {
     .sort()
     .at(-1);
 
-  const thisMonthTxns = state.transactions.filter((t) => monthKey(t.date) === latestMonth);
+  // Amounts only add up within one currency. The overview follows the
+  // currency most of this month's rows are in and says how many rows it left
+  // out, rather than summing yuan into dollars under a "$".
+  const currencyOf = (t) => t.currency || "USD";
+  const latestMonthTxns = state.transactions.filter((t) => monthKey(t.date) === latestMonth);
+  const currency = mostCommon(
+    (latestMonthTxns.length ? latestMonthTxns : state.transactions).map(currencyOf)
+  );
+  const inCurrency = state.transactions.filter((t) => currencyOf(t) === currency);
+  const otherCount = state.transactions.length - inCurrency.length;
+  const note = document.getElementById("overview-currency-note");
+  note.hidden = otherCount === 0;
+  note.textContent = `Totals are in ${currency}. ${otherCount} transaction(s) in other currencies aren't included.`;
+  document.getElementById("budget-currency").textContent = currencySymbol(currency);
+
+  const thisMonthTxns = inCurrency.filter((t) => monthKey(t.date) === latestMonth);
   const totalSpent = thisMonthTxns.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
   const remaining = state.budget - totalSpent;
   const usageRate = state.budget > 0 ? (totalSpent / state.budget) * 100 : 0;
@@ -169,9 +206,9 @@ function renderOverview() {
   if (document.activeElement !== budgetInput) {
     budgetInput.value = state.budget;
   }
-  document.getElementById("health-spent").textContent = formatMoney(totalSpent);
+  document.getElementById("health-spent").textContent = formatMoney(totalSpent, currency);
   const remainingEl = document.getElementById("health-remaining");
-  remainingEl.textContent = formatMoney(remaining);
+  remainingEl.textContent = formatMoney(remaining, currency);
   remainingEl.classList.toggle("is-negative", remaining < 0);
   const badge = document.getElementById("health-badge");
   badge.textContent = statusLabel;
@@ -181,7 +218,7 @@ function renderOverview() {
   fill.className = `usage-bar-fill ${statusType === "healthy" ? "" : statusType}`.trim();
 
   const monthTotals = new Map();
-  for (const t of state.transactions) {
+  for (const t of inCurrency) {
     const key = monthKey(t.date);
     if (!key) continue;
     monthTotals.set(key, (monthTotals.get(key) || 0) + (Number(t.amount) || 0));
@@ -190,7 +227,7 @@ function renderOverview() {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .slice(-6)
     .map(([key, amount]) => ({ label: formatMonthLabel(key), amount }));
-  renderBarList(document.getElementById("trend-months"), monthRows);
+  renderBarList(document.getElementById("trend-months"), monthRows, currency);
 
   const categoryTotals = new Map();
   for (const t of thisMonthTxns) {
@@ -200,7 +237,7 @@ function renderOverview() {
   const categoryRows = [...categoryTotals.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([label, amount]) => ({ label, amount }));
-  renderBarList(document.getElementById("trend-categories"), categoryRows);
+  renderBarList(document.getElementById("trend-categories"), categoryRows, currency);
 }
 
 function setupOverviewPanel() {
