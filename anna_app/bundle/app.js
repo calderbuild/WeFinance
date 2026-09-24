@@ -50,6 +50,15 @@ function formatTransactionsSummary(transactions) {
     .join("\n");
 }
 
+// Transaction and recommendation text comes from an LLM reading whatever a user
+// uploads or types, so it's untrusted -- escape before it ever hits innerHTML.
+function esc(value) {
+  return String(value ?? "").replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+  );
+}
+
 function setStatus(el, message, isError) {
   el.textContent = message || "";
   el.classList.toggle("is-error", Boolean(isError));
@@ -62,11 +71,11 @@ function renderTransactionTable(transactions) {
   for (const t of transactions) {
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td>${t.date ?? ""}</td>
-      <td>${t.merchant ?? ""}</td>
-      <td>${t.category ?? ""}</td>
-      <td>${t.amount ?? ""}</td>
-      <td>${t.currency ?? ""}</td>
+      <td>${esc(t.date)}</td>
+      <td>${esc(t.merchant)}</td>
+      <td>${esc(t.category)}</td>
+      <td>${esc(t.amount)}</td>
+      <td>${esc(t.currency)}</td>
     `;
     tbody.appendChild(row);
   }
@@ -140,9 +149,9 @@ function renderBarList(container, rows, currency) {
     el.className = "bar-row";
     const pct = Math.max(2, Math.round((row.amount / max) * 100));
     el.innerHTML = `
-      <div class="bar-row-label">${row.label}</div>
+      <div class="bar-row-label">${esc(row.label)}</div>
       <div class="bar-track"><div class="bar-fill" style="width: ${pct}%"></div></div>
-      <div class="bar-row-value">${formatMoney(row.amount, currency)}</div>
+      <div class="bar-row-value">${esc(formatMoney(row.amount, currency))}</div>
     `;
     container.appendChild(el);
   }
@@ -353,11 +362,11 @@ function renderRecommendations(recommendations) {
   for (const rec of recommendations) {
     const card = document.createElement("div");
     card.className = "rec-card";
-    const steps = (rec.rationale_steps || []).map((s) => `<li>${s}</li>`).join("");
+    const steps = (rec.rationale_steps || []).map((s) => `<li>${esc(s)}</li>`).join("");
     card.innerHTML = `
-      <h3>${rec.title ?? ""}</h3>
-      <span class="risk-level">${rec.risk_level ?? ""}</span>
-      <p>${rec.summary ?? ""}</p>
+      <h3>${esc(rec.title)}</h3>
+      <span class="risk-level">${esc(rec.risk_level)}</span>
+      <p>${esc(rec.summary)}</p>
       <ul>${steps}</ul>
     `;
     container.appendChild(card);
