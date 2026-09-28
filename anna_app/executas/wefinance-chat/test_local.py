@@ -115,6 +115,8 @@ def main() -> int:
         assert (
             reverse_rpc["params"]["messages"][0]["content"]["type"] == "text"
         ), reverse_rpc
+        hints = [h["name"] for h in reverse_rpc["params"]["modelPreferences"]["hints"]]
+        assert hints == ["gemini", "gpt"], hints
         print("sampling/createMessage request: OK (well-formed)")
 
         send(

@@ -189,6 +189,10 @@ def sample(invoke_id: str, prompt: str, *, max_tokens: int = 2000) -> str:
                 "maxTokens": max_tokens,
                 "systemPrompt": SYSTEM_PROMPT,
                 "includeContext": "none",
+                # The default qwen model spent the whole 2000-token budget
+                # without emitting any text (seen live on 2026-09-28), so ask
+                # for the same fast models Recommendations uses.
+                "modelPreferences": {"hints": [{"name": "gemini"}, {"name": "gpt"}]},
                 "metadata": {"executa_invoke_id": invoke_id},
             },
         }
