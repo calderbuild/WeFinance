@@ -8,6 +8,8 @@ English | **[中文](./README_zh-CN.md)**
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 
+**Try it on Anna**: [WeFinance in the Anna App Store](https://anna.partners/store/@calderbuild/wefinance?ref=github). Scan a bill, track a monthly budget, and ask questions about your spending, inside the Anna desktop or cloud agent.
+
 **Live Demo**: [https://wefinance-copilot.streamlit.app](https://wefinance-copilot.streamlit.app)
 
 ---

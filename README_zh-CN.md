@@ -8,6 +8,8 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 
+**在 Anna 上使用**：[Anna 应用商店里的 WeFinance](https://anna.partners/store/@calderbuild/wefinance?ref=github-zh)。拍账单记账、设月度预算、按真实消费提问，直接在 Anna 桌面端或云端 agent 里用。
+
 **在线演示**: [https://wefinance-copilot.streamlit.app](https://wefinance-copilot.streamlit.app)
 
 ---
