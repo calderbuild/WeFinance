@@ -24,7 +24,7 @@
     ],
     "host_api": {
       "tools": ["required:*"],
-      "storage": ["get", "set", "delete"]
+      "storage": ["get", "set"]
     }
   }
 }
