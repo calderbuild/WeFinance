@@ -23,7 +23,7 @@ from collections import defaultdict
 MANIFEST = {
     "name": "wefinance-recommend",
     "display_name": "WeFinance Investment Recommendations",
-    "version": "0.1.8",
+    "version": "0.1.9",
     "description": "Generate explainable investment recommendations grounded in the user's real spending data.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample"],
@@ -363,7 +363,7 @@ def _request_structured_completion(
         data = json.loads(text)
     except json.JSONDecodeError as exc:
         raise RuntimeError(
-            f"model did not return valid JSON: {exc}; text={text[:200]!r}"
+            f"model did not return valid JSON ({exc.msg} at char {exc.pos} of {len(text)})"
         ) from exc
 
     # executa-sampling.md "Reading the result": onUnsupported="json_object"
@@ -388,6 +388,11 @@ RETRY_REPAIR_SUFFIX = (
     '{"recommendations": [{"title": "...", "summary": "...", '
     '"rationale_steps": ["...", "..."], "risk_level": "..."}]}'
 )
+
+
+def _shape(data) -> str:
+    # The reply is model text about the user's money; describe it, don't echo it.
+    return f"keys {sorted(data)}" if isinstance(data, dict) else type(data).__name__
 
 
 def sample_structured(invoke_id: str, prompt: str, *, max_tokens: int = 3000) -> dict:
@@ -417,7 +422,7 @@ def sample_structured(invoke_id: str, prompt: str, *, max_tokens: int = 3000) ->
         raise RuntimeError(
             "Model response was downgraded from json_schema and did not contain "
             "'recommendations' (after one retry with an explicit shape "
-            f"instruction): {json.dumps(retry_data)[:200]!r}"
+            f"instruction); reply was {_shape(retry_data)}"
         )
     return retry_data
 
@@ -572,7 +577,7 @@ def handle(req: dict) -> dict:
                 monthly_income = float(raw_income)
             except (TypeError, ValueError):
                 print(
-                    f"monthly_income {raw_income!r} is not numeric, ignoring",
+                    "monthly_income is not numeric, ignoring",
                     file=sys.stderr,
                 )
 
