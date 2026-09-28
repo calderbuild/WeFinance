@@ -144,7 +144,10 @@ def test_rows_are_rebuilt_from_known_fields() -> None:
     }, row
     assert len(row["merchant"]) == module.MAX_MERCHANT_LEN, row
     assert row["category"] == "Other" and row["currency"] == "CNY", row
-    assert row["inferred_fields"] == ["category"], row
+    assert row["inferred_fields"] == ["category", "currency"], row
+    assert row["partial_data"] is True, row
+    usd = module._validate_and_fix_transaction({"amount": 5, "currency": "$"}, 4, "h")
+    assert usd["currency"] == "USD" and usd["partial_data"] is False, usd
     assert (
         module._validate_and_fix_transaction(
             {"category": "dining", "amount": 3}, 1, "h"

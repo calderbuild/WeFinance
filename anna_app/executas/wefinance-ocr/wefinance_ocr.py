@@ -270,6 +270,9 @@ CATEGORIES = {
 }
 MAX_MERCHANT_LEN = 80
 INFERABLE_FIELDS = {"date", "merchant", "category", "amount", "currency"}
+# The prompt asks for ISO codes, but a symbol sometimes slips through. Map the
+# common ones; anything else falls back to CNY and is marked as a guess.
+CURRENCY_SYMBOLS = {"$": "USD", "¥": "CNY", "元": "CNY", "RMB": "CNY", "€": "EUR", "£": "GBP"}
 
 
 def _validate_and_fix_transaction(item: dict, idx: int, source_hash: str):
@@ -293,16 +296,21 @@ def _validate_and_fix_transaction(item: dict, idx: int, source_hash: str):
     merchant = " ".join(str(raw.get("merchant") or "").split())[:MAX_MERCHANT_LEN]
     category = str(raw.get("category") or "").strip().title()
     currency = str(raw.get("currency") or "").strip().upper()
+    currency = CURRENCY_SYMBOLS.get(currency, currency)
     inferred = raw.get("inferred_fields")
-    inferred = inferred if isinstance(inferred, list) else []
+    inferred = [f for f in inferred if f in INFERABLE_FIELDS] if isinstance(inferred, list) else []
+    partial = raw.get("partial_data") is True
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        currency, partial = "CNY", True
+        inferred = sorted(set(inferred) | {"currency"})
     payload = {
         "date": _parse_date(raw.get("date")),
         "merchant": merchant or "Unknown Merchant",
         "category": category if category in CATEGORIES else "Other",
         "amount": amount,
-        "currency": currency if re.fullmatch(r"[A-Z]{3}", currency) else "CNY",
-        "partial_data": raw.get("partial_data") is True,
-        "inferred_fields": [f for f in inferred if f in INFERABLE_FIELDS],
+        "currency": currency,
+        "partial_data": partial,
+        "inferred_fields": inferred,
     }
     payload["id"] = _generate_transaction_id(
         merchant=payload["merchant"],
