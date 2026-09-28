@@ -50,6 +50,7 @@ import base64
 import binascii
 import hashlib
 import json
+import math
 import queue
 import re
 import sys
@@ -60,7 +61,7 @@ from datetime import date, datetime
 MANIFEST = {
     "name": "wefinance-ocr",
     "display_name": "WeFinance Bill Scanner",
-    "version": "0.2.3",
+    "version": "0.2.4",
     "description": "Extract structured transactions from a photo of a bill, receipt, or payment screenshot.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample", "llm.agent.auto"],
@@ -205,7 +206,11 @@ def _robust_json_parse(content: str) -> dict:
 
     # Raise instead of returning []: a non-JSON reply (e.g. "I can't see an
     # image") used to surface as "No transactions found in that image."
-    raise RuntimeError(f"Bill Scanner couldn't parse the model's reply: {text[:200]!r}")
+    # The reply is receipt text, so only its length goes into the error.
+    raise RuntimeError(
+        f"Bill Scanner couldn't read a transaction list from the model's reply "
+        f"({len(text)} characters). Please try again."
+    )
 
 
 _DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%m/%d/%Y", "%d/%m/%Y")
@@ -248,40 +253,65 @@ def _generate_transaction_id(
     return digest[:16]
 
 
-def _validate_and_fix_transaction(item: dict, idx: int, source_hash: str):
-    payload = dict(item)
-    for typo, correct in TYPO_FIELD_MAP.items():
-        if typo in payload and correct not in payload:
-            payload[correct] = payload.pop(typo)
+# Every field here is read off an image someone else may have written, so the
+# row that leaves this tool is rebuilt from known fields with known shapes
+# instead of passing the model's dict through.
+CATEGORIES = {
+    "Dining",
+    "Groceries",
+    "Transport",
+    "Shopping",
+    "Entertainment",
+    "Healthcare",
+    "Education",
+    "Housing",
+    "Utilities",
+    "Other",
+}
+MAX_MERCHANT_LEN = 80
+INFERABLE_FIELDS = {"date", "merchant", "category", "amount", "currency"}
 
-    if "amount" not in payload:
-        print(f"Transaction {idx} missing amount field, skipping", file=sys.stderr)
+
+def _validate_and_fix_transaction(item: dict, idx: int, source_hash: str):
+    if not isinstance(item, dict):
+        print(f"Transaction {idx} is not an object, skipping", file=sys.stderr)
         return None
+    raw = dict(item)
+    for typo, correct in TYPO_FIELD_MAP.items():
+        if typo in raw and correct not in raw:
+            raw[correct] = raw.pop(typo)
 
     try:
-        payload["amount"] = float(payload["amount"])
-    except (TypeError, ValueError):
-        print(f"Transaction {idx} has non-numeric amount, skipping", file=sys.stderr)
+        amount = float(raw["amount"])
+    except (KeyError, TypeError, ValueError):
+        print(f"Transaction {idx} has no numeric amount, skipping", file=sys.stderr)
+        return None
+    if not math.isfinite(amount):
+        print(f"Transaction {idx} has a non-finite amount, skipping", file=sys.stderr)
         return None
 
-    if not payload.get("merchant"):
-        payload["merchant"] = "Unknown Merchant"
-
-    payload["date"] = _parse_date(payload.get("date"))
-    payload.setdefault("currency", "CNY")
-    payload.setdefault("category", "Other")
-    payload.setdefault("line_items", [])
-
-    if not payload.get("id"):
-        payload["id"] = _generate_transaction_id(
-            merchant=payload["merchant"],
-            date_value=payload["date"],
-            amount=payload["amount"],
-            currency=payload["currency"],
-            source_hash=source_hash,
-            sequence=idx,
-        )
-
+    merchant = " ".join(str(raw.get("merchant") or "").split())[:MAX_MERCHANT_LEN]
+    category = str(raw.get("category") or "").strip().title()
+    currency = str(raw.get("currency") or "").strip().upper()
+    inferred = raw.get("inferred_fields")
+    inferred = inferred if isinstance(inferred, list) else []
+    payload = {
+        "date": _parse_date(raw.get("date")),
+        "merchant": merchant or "Unknown Merchant",
+        "category": category if category in CATEGORIES else "Other",
+        "amount": amount,
+        "currency": currency if re.fullmatch(r"[A-Z]{3}", currency) else "CNY",
+        "partial_data": raw.get("partial_data") is True,
+        "inferred_fields": [f for f in inferred if f in INFERABLE_FIELDS],
+    }
+    payload["id"] = _generate_transaction_id(
+        merchant=payload["merchant"],
+        date_value=payload["date"],
+        amount=payload["amount"],
+        currency=payload["currency"],
+        source_hash=source_hash,
+        sequence=idx,
+    )
     return payload
 
 
@@ -441,7 +471,8 @@ def run_session(app_session_uuid: str, prompt: str, attachment: dict) -> str:
         return final["text"]
     if deltas:
         return "".join(deltas)
-    raise RuntimeError(f"agent/session.run returned no text: {result!r}"[:500])
+    keys = sorted(result) if isinstance(result, dict) else type(result).__name__
+    raise RuntimeError(f"agent/session.run returned no text (reply keys: {keys})")
 
 
 def close_session(app_session_uuid: str) -> None:
@@ -492,7 +523,9 @@ def _validate_base64_image(image_base64: str) -> str:
 def extract_transactions(image_base64: str, image_type: str) -> list:
     image_base64 = _validate_base64_image(image_base64)
     source_hash = hashlib.sha256(image_base64.encode("utf-8")).hexdigest()
-    extension = image_type.split("/")[-1].split("+")[0] or "jpg"
+    if not re.fullmatch(r"image/[a-z0-9.+-]{1,40}", image_type or ""):
+        raise ValueError("image_type must be an image MIME type such as image/jpeg")
+    extension = image_type.split("/")[-1].split("+")[0]
     attachment = {
         "type": image_type,
         "data": image_base64,
