@@ -12,7 +12,10 @@ const DEFAULT_BUDGET = 5000;
 
 const state = {
   transactions: [],
-  budget: DEFAULT_BUDGET,
+  // One budget per currency, e.g. {USD: 5000, CNY: 3000}. A single untyped
+  // number would get relabeled whenever the overview switches currency.
+  budgets: {},
+  overviewCurrency: "USD",
 };
 
 let anna;
@@ -92,7 +95,24 @@ async function persistTransactions() {
 }
 
 async function persistBudget() {
-  await anna.storage.set({ key: "budget", value: state.budget });
+  await anna.storage.set({ key: "budgets", value: state.budgets });
+}
+
+function budgetFor(budgets, currency) {
+  const value = budgets[currency];
+  return typeof value === "number" && value >= 0 ? value : DEFAULT_BUDGET;
+}
+
+// Older versions stored one number under "budget". It belongs to whatever
+// currency the overview was showing, which is the currency it opens in now.
+function migrateBudgets(storedBudgets, legacyBudget, currency) {
+  if (storedBudgets && typeof storedBudgets === "object" && !Array.isArray(storedBudgets)) {
+    return storedBudgets;
+  }
+  if (typeof legacyBudget === "number" && legacyBudget >= 0) {
+    return { [currency]: legacyBudget };
+  }
+  return {};
 }
 
 function monthKey(dateStr) {
@@ -128,6 +148,25 @@ function mostCommon(values) {
   const counts = new Map();
   for (const v of values) counts.set(v, (counts.get(v) || 0) + 1);
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+}
+
+const currencyOf = (t) => t.currency || "USD";
+
+function latestMonthOf(transactions) {
+  return transactions
+    .map((t) => monthKey(t.date))
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+}
+
+// The currency most of the latest month's rows are in (USD when there are none).
+function overviewCurrencyOf(transactions) {
+  const latestMonth = latestMonthOf(transactions);
+  const latestMonthTxns = transactions.filter((t) => monthKey(t.date) === latestMonth);
+  return (
+    mostCommon((latestMonthTxns.length ? latestMonthTxns : transactions).map(currencyOf)) || "USD"
+  );
 }
 
 function formatMonthLabel(key) {
@@ -172,31 +211,25 @@ function renderOverview() {
   // "This month" tracks the app's own data (latest scanned transaction),
   // not the device clock -- a personal ledger's current period is defined
   // by what's actually been scanned, not by wall-clock date.
-  const latestMonth = state.transactions
-    .map((t) => monthKey(t.date))
-    .filter(Boolean)
-    .sort()
-    .at(-1);
+  const latestMonth = latestMonthOf(state.transactions);
 
   // Amounts only add up within one currency. The overview follows the
   // currency most of this month's rows are in and says how many rows it left
   // out, rather than summing yuan into dollars under a "$".
-  const currencyOf = (t) => t.currency || "USD";
-  const latestMonthTxns = state.transactions.filter((t) => monthKey(t.date) === latestMonth);
-  const currency = mostCommon(
-    (latestMonthTxns.length ? latestMonthTxns : state.transactions).map(currencyOf)
-  );
+  const currency = overviewCurrencyOf(state.transactions);
   const inCurrency = state.transactions.filter((t) => currencyOf(t) === currency);
   const otherCount = state.transactions.length - inCurrency.length;
   const note = document.getElementById("overview-currency-note");
   note.hidden = otherCount === 0;
   note.textContent = `Totals are in ${currency}. ${otherCount} transaction(s) in other currencies aren't included.`;
   document.getElementById("budget-currency").textContent = currencySymbol(currency);
+  state.overviewCurrency = currency;
+  const budget = budgetFor(state.budgets, currency);
 
   const thisMonthTxns = inCurrency.filter((t) => monthKey(t.date) === latestMonth);
   const totalSpent = thisMonthTxns.reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-  const remaining = state.budget - totalSpent;
-  const usageRate = state.budget > 0 ? (totalSpent / state.budget) * 100 : 0;
+  const remaining = budget - totalSpent;
+  const usageRate = budget > 0 ? (totalSpent / budget) * 100 : 0;
 
   let statusLabel = "Healthy";
   let statusType = "healthy";
@@ -213,7 +246,7 @@ function renderOverview() {
 
   const budgetInput = document.getElementById("budget-input");
   if (document.activeElement !== budgetInput) {
-    budgetInput.value = state.budget;
+    budgetInput.value = budget;
   }
   document.getElementById("health-spent").textContent = formatMoney(totalSpent, currency);
   const remainingEl = document.getElementById("health-remaining");
@@ -253,7 +286,8 @@ function setupOverviewPanel() {
   const budgetInput = document.getElementById("budget-input");
   budgetInput.addEventListener("change", async () => {
     const value = Number(budgetInput.value);
-    state.budget = Number.isFinite(value) && value >= 0 ? value : DEFAULT_BUDGET;
+    state.budgets[state.overviewCurrency] =
+      Number.isFinite(value) && value >= 0 ? value : DEFAULT_BUDGET;
     await persistBudget();
     renderOverview();
   });
@@ -419,21 +453,20 @@ async function main() {
   // updated by anna.storage.set(). Those are two separate backends; writing
   // to one and reading from the other is why data looked persisted within
   // a session but reset to empty on every reopen.
-  const [storedTransactions, storedBudget] = await Promise.all([
+  const [storedTransactions, storedBudgets, legacyBudget] = await Promise.all([
     anna.storage.get({ key: "transactions" }),
+    anna.storage.get({ key: "budgets" }),
     anna.storage.get({ key: "budget" }),
   ]);
   if (storedTransactions?.exists && Array.isArray(storedTransactions.value)) {
     state.transactions = storedTransactions.value;
     renderTransactionTable(state.transactions);
   }
-  if (
-    storedBudget?.exists &&
-    typeof storedBudget.value === "number" &&
-    storedBudget.value >= 0
-  ) {
-    state.budget = storedBudget.value;
-  }
+  state.budgets = migrateBudgets(
+    storedBudgets?.exists ? storedBudgets.value : null,
+    legacyBudget?.exists ? legacyBudget.value : null,
+    overviewCurrencyOf(state.transactions)
+  );
   refreshTransactionCounts();
   renderOverview();
 

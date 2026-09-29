@@ -42,3 +42,6 @@ jobs:
 
       - name: Lint
         run: ruff check .
+
+      - name: App bundle checks
+        run: node anna_app/check_budget.mjs
