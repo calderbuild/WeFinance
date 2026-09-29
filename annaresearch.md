@@ -209,6 +209,7 @@ chat 和 recommendation 两个纯文本服务切到 Sampling 的好处：不占�
 
 - Reverse-RPC 方法名是 `agent/session.create` / `agent/session.run` / `agent/session.cancel` / `agent/session.delete`（**不是** `.close`）
 - `session.create` 用 `kind="agent"` + `agent_submode="auto"`，**不是** `kind="fixed"`——`fixed` 是"绑定到某一个已注册的其他 Executa Tool（靠 `fixed_client_id`）单次调用"，不适用于"就是想让模型看一眼图片回答"这种场景；`kind="agent"` + `submode="auto"` 才是文档里给纯图片理解场景的示例写法
+  - 更正（2026-09-29）：现行的 `reference-executa-agent-sessions.json` 里 `session_create` 的签名只有 `agent_submode` / `fixed_client_id` / `label` / `quota_caps` / `ttl_seconds`，已经没有 `kind` 参数；Bill Scanner 不传 `kind`，在 0.2.15 上实测扫描正常
 - 创建响应里会话标识字段叫 `app_session_uuid`，不是 `session_id`
 - `session.run` 是 v2 的"缓冲式流"：响应结构是 `{run_id, stream_id, frames: [...], final}`，答案文本在 `event=="final"` 的那个 frame 里，不是单个文本字段
 - `modelPreferences`（用来强制 vision-capable 模型，避免 `APP_MODEL_NOT_VISION_CAPABLE`）是 `session.run` 的**逐次**参数，不是建会话时传一次
