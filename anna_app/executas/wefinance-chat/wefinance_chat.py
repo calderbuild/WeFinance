@@ -28,7 +28,7 @@ import uuid
 MANIFEST = {
     "name": "wefinance-chat",
     "display_name": "WeFinance Advisor Chat",
-    "version": "0.1.7",
+    "version": "0.1.8",
     "description": "Ask financial questions about your spending and get advice grounded in your actual transactions.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample"],
@@ -102,6 +102,19 @@ SAMPLING_ERROR_CODES_BY_NUMBER = {
 }
 
 
+def _plain_detail(error) -> str:
+    """The host's error message if it is short plain text, else "".
+
+    Anna support asked for upstream detail in errors, but an unmapped code
+    once carried a whole Cloudflare 520 HTML page, so markup and long bodies
+    go to stderr only."""
+    msg = error.get("message") if isinstance(error, dict) else None
+    if isinstance(msg, str) and "<" not in msg and len(msg) <= 200:
+        return msg
+    print(f"host error detail withheld: {str(error)[:500]}", file=sys.stderr)
+    return ""
+
+
 def _friendly_sampling_error(error: dict) -> str:
     data = error.get("data") if isinstance(error, dict) else None
     code_name: str = ""
@@ -114,7 +127,12 @@ def _friendly_sampling_error(error: dict) -> str:
             if isinstance(code_num, int)
             else ""
         )
-    return SAMPLING_ERROR_MESSAGES.get(code_name, str(error))
+    detail = _plain_detail(error)
+    base = SAMPLING_ERROR_MESSAGES.get(
+        code_name,
+        f"The model backend had an error ({code_name or 'unknown'}). Try again in a moment.",
+    )
+    return f"{base} ({detail})" if detail else base
 
 
 # --- Reverse-RPC (Sampling) plumbing ----------------------------------------

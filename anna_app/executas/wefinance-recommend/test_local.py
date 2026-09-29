@@ -113,7 +113,28 @@ def recv(proc: subprocess.Popen) -> dict:
     return json.loads(line)
 
 
+def test_raw_upstream_page_never_reaches_user() -> None:
+    """A Cloudflare 520 HTML body once showed up verbatim in the Scan tab."""
+    import contextlib
+    import io
+
+    module = _load_plugin_module()
+    html = {
+        "code": -32003,
+        "message": 'app_agent_run HTTP 520: <!DOCTYPE html> <html class="no-js">',
+        "data": {"errorCode": "provider_error"},
+    }
+    with contextlib.redirect_stderr(io.StringIO()):
+        msg = module._friendly_sampling_error(html)
+    assert "<" not in msg and "DOCTYPE" not in msg, msg
+    assert "provider_error" in msg, msg
+    plain = {"code": -32003, "message": "model quota exceeded"}
+    assert "model quota exceeded" in module._friendly_sampling_error(plain)
+    print("raw upstream page withheld: OK")
+
+
 def main() -> int:
+    test_raw_upstream_page_never_reaches_user()
     test_friendly_sampling_error_surfaces_provider_detail()
     test_sampling_timeout_produces_diagnosable_message()
 
