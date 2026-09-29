@@ -5,55 +5,52 @@ Ports services/vision_ocr_service.py's "count first, then extract" Vision OCR
 prompt and its robust JSON parsing / field-fixup logic. Speaks JSON-RPC 2.0
 over stdio (Anna Executa protocol v2).
 
-Unlike wefinance-chat/wefinance-recommend, this Tool does NOT use Sampling
-(sampling/createMessage only accepts text content -- confirmed with Anna's
-team, see annaresearch.md). It uses Anna's Agent Sessions instead
-(host_capabilities: ["llm.sample", "llm.agent.auto"]), which support native
-image input via an `attachments` array:
+The image goes to the model through Anna's Agent Sessions family
+(host_capabilities: ["llm.sample", "llm.agent.auto"]):
 
-    session.run(content=prompt, attachments=[
-        {"type": "image/jpeg", "data": "<base64>", "filename": "receipt.jpg"}
-    ])
+    agent/session.create(agent_submode="auto")
+    agent/session.run(content=prompt, allowed_tools=[],
+                      attachments=[{"type": "image/png", "data": "<base64>",
+                                    "filename": "bill.png"}])
+    agent/session.delete(...)
 
-per developers/apps/llm-and-agent.md section 3.0a and developers/tools/executa-agent.md
-(both confirmed 2026-08-09 against staging.anna.partners). This lets the Tool
-avoid shipping its own OPENAI_API_KEY entirely -- the host routes the vision
-call through the user's own plan, same as the other two Tools do for text.
+`attachments` on session.run is the only image input Anna documents
+(llm-and-agent.md section 3.0a, "the same field works on the plugin path").
+agent/complete (v0.2.0-v0.2.2) does NOT carry images: calling
+/copilot/app/complete directly on 2026-09-22 with the image as an MCP
+`{type: image, data, mimeType}` block, an OpenAI `image_url` block and an
+Anthropic `source` block all returned "no image visible", and the
+gemini-2.5-flash hint was routed to google/gemini-2.5-flash-image anyway.
+The model answered the prompt blind, which is how a US card statement came
+back as invented CNY convenience-store rows, or as zero transactions.
 
-Wire protocol notes (confirmed, not inferred):
-- Reverse-RPC methods: agent/session.create, agent/session.run,
-  agent/session.delete (NOT .close -- earlier draft guessed wrong).
-- session.create uses kind="agent" + agent_submode="auto" (kind="fixed" is
-  for pinning to ONE other already-registered executa tool via
-  fixed_client_id -- not applicable here, we're not calling another tool).
-  Response carries the session id under app_session_uuid (not session_id).
-- session.run is buffered streaming in protocol v2: the host returns
-  {run_id, stream_id, frames: [...], final} once the run completes, not a
-  single text blob like sampling's response. The answer text lives on the
-  frame with event == "final" -- and per the shipped reference plugin
-  (examples/python/executa-agent-demo), a run can also terminate on a
-  sentinel-only event == "complete" frame with no text at all, in which case
-  the answer is whatever "delta"/"token"/"message" frames were accumulated
-  along the way. Handle both, or a model that streams tokens and terminates
-  via "complete" would silently return zero transactions.
-- modelPreferences (to force a vision-capable model, avoiding
-  APP_MODEL_NOT_VISION_CAPABLE) is a per-RUN param on session.run, not on
-  session.create.
+Same probe against /copilot/app/agent with `attachments` read every merchant
+and amount correctly (google/gemini-3-flash-preview under the "gemini" hint,
+qwen3.7-plus with no hint). allowed_tools=[] keeps the run a pure model
+reply: v0.1.x never passed it and died with OpenRouter's "No endpoints found
+that support tool use" once tools were inherited.
+
+Deploying: publish/cut/submit-review only registers a build. The agent keeps
+running its old binary until Executa Hub -> My Tools -> Install pushes it.
+
+Wire protocol notes:
+- session.run is buffered streaming: the host returns {run_id, stream_id,
+  frames, final} once the run ends. Text arrives as 'sse' frames wrapping
+  OpenAI-style chunks (choices[0].delta.content); a provider failure rides
+  in on an 'sse' frame as a top-level `error` string.
 - initialize()'s "capabilities" key (not "client_capabilities") is confirmed
   correct -- see wefinance_chat.py's module docstring for the full reasoning;
   same applies here, extended with an empty "agent": {} entry since this tool
-  also negotiates Agent Sessions (executa-lifecycle.md: "an empty object is
-  fine -- it means I'm aware of this capability, no extra options").
-Still unverified without live Dev Access: whether agent_submode="auto"
-ever causes the model to attempt a tool call instead of answering directly
-(we don't grant this Tool access to any other executa tools, so it should
-have nothing to call, but this hasn't been exercised against a real host).
+  also negotiates the Agent Sessions family (executa-lifecycle.md: "an empty
+  object is fine -- it means I'm aware of this capability, no extra
+  options").
 """
 
 import base64
 import binascii
 import hashlib
 import json
+import math
 import queue
 import re
 import sys
@@ -64,7 +61,7 @@ from datetime import date, datetime
 MANIFEST = {
     "name": "wefinance-ocr",
     "display_name": "WeFinance Bill Scanner",
-    "version": "0.1.7",
+    "version": "0.2.4",
     "description": "Extract structured transactions from a photo of a bill, receipt, or payment screenshot.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample", "llm.agent.auto"],
@@ -86,12 +83,6 @@ MANIFEST = {
                     "description": "MIME type of the image, e.g. image/jpeg, image/png.",
                     "required": True,
                 },
-                {
-                    "name": "filename",
-                    "type": "string",
-                    "description": "Original filename, used only as an attachment label. Optional.",
-                    "required": False,
-                },
             ],
         }
     ],
@@ -103,69 +94,31 @@ TYPO_FIELD_MAP = {
     "catagory": "category",
 }
 
-OCR_PROMPT = """你是一个专业的财务账单识别助手。请仔细分析这张账单图片，提取所有交易记录。
+# English prompt + English categories: the App UI and its "Other" fallbacks
+# (app.js, wefinance-recommend) are English. The example uses a placeholder
+# merchant on purpose -- a realistic one gets echoed back when the model
+# can't read the image.
+OCR_PROMPT = """You extract transactions from financial documents. Read the attached image (a bill, receipt, bank or card statement, or payment screenshot) and extract every transaction in it.
 
-【核心识别规则】：
-★ 首先统计图片中有多少笔交易（有几行独立金额就有几笔交易）
-★ 然后逐行提取每一笔的详细信息，确保 transactions 数组长度 = transaction_count
-★ 如看到合计行，仅用于验证总额，不作为单独交易计数
+Rules:
+1. First count the transactions: each separate line with its own amount is one transaction. Then extract each one, so the length of "transactions" equals "transaction_count".
+2. Total, subtotal, balance and payment-due lines are only for cross-checking. Never report them as transactions.
+3. Report only what is actually visible in the image. Never invent merchants, dates or amounts.
+4. If no image is attached or you cannot read it, return exactly {"transaction_count": 0, "transactions": [], "error": "no_image"}.
 
-多语言处理规则：
-1. **语言识别**：
-   - 如果账单为韩文/日文/泰文等非中英文：
-     * 商户名保留原文（不要翻译）
-     * 金额(amount)和分类(category)必须提取
-     * 如果有英文字段，优先使用英文值
-   - 如果账单为中文/英文：正常提取所有字段
+Fields for each transaction:
+- date: YYYY-MM-DD, or null if the image doesn't show one. Today's date is given at the end of this message. Resolve relative dates ("today", "yesterday", a weekday name) against it. If the year isn't shown, use the most recent year that doesn't put the date after today, and list "date" in inferred_fields.
+- merchant: the merchant or payee exactly as written, in its original language (do not translate); "Unknown Merchant" if none is shown
+- category: one of Dining, Groceries, Transport, Shopping, Entertainment, Healthcare, Education, Housing, Utilities, Other
+- amount: a number without currency symbols. Money spent is positive. Refunds and other money coming back to the payer (shown with "+", or labelled refund / 退款) are negative, so they cancel the original purchase.
+- currency: ISO 4217 code. "$" means USD unless marked otherwise ("S$" is SGD, "HK$" is HKD); "¥", "元" or "RMB" means CNY; "RM" means MYR; "฿" means THB; "₩" means KRW; "€" means EUR; "£" means GBP. With no symbol, infer it from the document's language and country.
+- partial_data: true if any field was inferred rather than read from the image
+- inferred_fields: names of the inferred fields, e.g. ["category"]
 
-2. **字段容错策略**：
-   - date缺失 → 尝试从receipt_time推断，或设为null（但标记partial_data=true）
-   - merchant缺失 → 从票据抬头/店铺名提取，找不到则设为"Unknown Merchant"
-   - category缺失 → 根据商品明细智能推断（食品→餐饮，服装→购物，交通卡→交通）
-   - **即使部分字段缺失，也要返回数据，不要直接返回空数组[]**
+Return a single JSON object and nothing else (no markdown code fences):
+{"transaction_count": 1, "transactions": [{"date": "2026-01-01", "merchant": "Example Store", "category": "Shopping", "amount": 10.0, "currency": "USD", "partial_data": false, "inferred_fields": []}]}
 
-3. **货币识别增强**：
-   - RM 或 MYR → "MYR"（马来西亚林吉特）
-   - ฿ 或 THB → "THB"（泰铢）
-   - ₩ 或 KRW → "KRW"（韩元）
-   - ¥ → "CNY"（人民币）
-   - $ → "USD"（美元，但S$为SGD新加坡元）
-   - 无符号且无法判断 → 默认"CNY"
-
-4. **提取字段**：
-   - date: 日期（YYYY-MM-DD格式）或 null
-   - merchant: 商户名称（保持原文）或 "Unknown Merchant"
-   - category: 分类（餐饮、交通、购物、娱乐、医疗、教育、其他）
-   - amount: 总金额（数字，不带货币符号，必需）
-   - currency: 货币代码（见上述规则）
-   - partial_data: 布尔值（如果有字段被推断，设为true）
-   - inferred_fields: 数组（列出哪些字段是推断的，如 ["date", "merchant"]）
-
-5. **详细收据字段**（可选）：
-   - line_items: 商品明细数组
-   - subtotal: 小计
-   - total_discount: 总折扣金额
-   - receipt_number: 收据编号
-
-返回格式（纯JSON对象，不要markdown代码块）：
-{
-  "transaction_count": 4,
-  "transactions": [
-    {
-      "date": "2025-11-01",
-      "merchant": "星巴克",
-      "category": "餐饮",
-      "amount": 45.0,
-      "currency": "CNY",
-      "partial_data": false,
-      "inferred_fields": []
-    }
-  ]
-}
-
-如果图片中没有交易记录，返回：{"transaction_count": 0, "transactions": []}
-
-重要：即使部分字段缺失，也要尝试返回部分数据，并标记inferred_fields。"""
+If the image shows no transactions, return {"transaction_count": 0, "transactions": []}."""
 
 
 # --- JSON parsing / field fixup (ported from vision_ocr_service.py, no
@@ -211,7 +164,7 @@ def _fix_entries(items) -> list:
 
 
 def _robust_json_parse(content: str) -> dict:
-    """Returns {"transaction_count": int, "transactions": [...]}."""
+    """Returns {"transaction_count": int, "transactions": [...], "error": str|None}."""
 
     text = _strip_markdown_fences(content or "")
 
@@ -223,6 +176,7 @@ def _robust_json_parse(content: str) -> dict:
                     "transaction_count", len(direct["transactions"])
                 ),
                 "transactions": _fix_entries(direct["transactions"]),
+                "error": direct.get("error"),
             }
         return {"transaction_count": len(direct), "transactions": _fix_entries(direct)}
 
@@ -250,8 +204,13 @@ def _robust_json_parse(content: str) -> dict:
         rows = fallback if isinstance(fallback, list) else fallback["transactions"]
         return {"transaction_count": len(rows), "transactions": _fix_entries(rows)}
 
-    print(f"JSON parse failed, raw snippet: {text[:200]}", file=sys.stderr)
-    return {"transaction_count": 0, "transactions": []}
+    # Raise instead of returning []: a non-JSON reply (e.g. "I can't see an
+    # image") used to surface as "No transactions found in that image."
+    # The reply is receipt text, so only its length goes into the error.
+    raise RuntimeError(
+        f"Bill Scanner couldn't read a transaction list from the model's reply "
+        f"({len(text)} characters). Please try again."
+    )
 
 
 _DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%m/%d/%Y", "%d/%m/%Y")
@@ -294,40 +253,73 @@ def _generate_transaction_id(
     return digest[:16]
 
 
-def _validate_and_fix_transaction(item: dict, idx: int, source_hash: str):
-    payload = dict(item)
-    for typo, correct in TYPO_FIELD_MAP.items():
-        if typo in payload and correct not in payload:
-            payload[correct] = payload.pop(typo)
+# Every field here is read off an image someone else may have written, so the
+# row that leaves this tool is rebuilt from known fields with known shapes
+# instead of passing the model's dict through.
+CATEGORIES = {
+    "Dining",
+    "Groceries",
+    "Transport",
+    "Shopping",
+    "Entertainment",
+    "Healthcare",
+    "Education",
+    "Housing",
+    "Utilities",
+    "Other",
+}
+MAX_MERCHANT_LEN = 80
+INFERABLE_FIELDS = {"date", "merchant", "category", "amount", "currency"}
+# The prompt asks for ISO codes, but a symbol sometimes slips through. Map the
+# common ones; anything else falls back to CNY and is marked as a guess.
+CURRENCY_SYMBOLS = {"$": "USD", "¥": "CNY", "元": "CNY", "RMB": "CNY", "€": "EUR", "£": "GBP"}
 
-    if "amount" not in payload:
-        print(f"Transaction {idx} missing amount field, skipping", file=sys.stderr)
+
+def _validate_and_fix_transaction(item: dict, idx: int, source_hash: str):
+    if not isinstance(item, dict):
+        print(f"Transaction {idx} is not an object, skipping", file=sys.stderr)
         return None
+    raw = dict(item)
+    for typo, correct in TYPO_FIELD_MAP.items():
+        if typo in raw and correct not in raw:
+            raw[correct] = raw.pop(typo)
 
     try:
-        payload["amount"] = float(payload["amount"])
-    except (TypeError, ValueError):
-        print(f"Transaction {idx} has non-numeric amount, skipping", file=sys.stderr)
+        amount = float(raw["amount"])
+    except (KeyError, TypeError, ValueError):
+        print(f"Transaction {idx} has no numeric amount, skipping", file=sys.stderr)
+        return None
+    if not math.isfinite(amount):
+        print(f"Transaction {idx} has a non-finite amount, skipping", file=sys.stderr)
         return None
 
-    if not payload.get("merchant"):
-        payload["merchant"] = "Unknown Merchant"
-
-    payload["date"] = _parse_date(payload.get("date"))
-    payload.setdefault("currency", "CNY")
-    payload.setdefault("category", "其他")
-    payload.setdefault("line_items", [])
-
-    if not payload.get("id"):
-        payload["id"] = _generate_transaction_id(
-            merchant=payload["merchant"],
-            date_value=payload["date"],
-            amount=payload["amount"],
-            currency=payload["currency"],
-            source_hash=source_hash,
-            sequence=idx,
-        )
-
+    merchant = " ".join(str(raw.get("merchant") or "").split())[:MAX_MERCHANT_LEN]
+    category = str(raw.get("category") or "").strip().title()
+    currency = str(raw.get("currency") or "").strip().upper()
+    currency = CURRENCY_SYMBOLS.get(currency, currency)
+    inferred = raw.get("inferred_fields")
+    inferred = [f for f in inferred if f in INFERABLE_FIELDS] if isinstance(inferred, list) else []
+    partial = raw.get("partial_data") is True
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        currency, partial = "CNY", True
+        inferred = sorted(set(inferred) | {"currency"})
+    payload = {
+        "date": _parse_date(raw.get("date")),
+        "merchant": merchant or "Unknown Merchant",
+        "category": category if category in CATEGORIES else "Other",
+        "amount": amount,
+        "currency": currency,
+        "partial_data": partial,
+        "inferred_fields": inferred,
+    }
+    payload["id"] = _generate_transaction_id(
+        merchant=payload["merchant"],
+        date_value=payload["date"],
+        amount=payload["amount"],
+        currency=payload["currency"],
+        source_hash=source_hash,
+        sequence=idx,
+    )
     return payload
 
 
@@ -428,7 +420,7 @@ def _call(method: str, params: dict, timeout: float) -> dict:
     return resp["result"]
 
 
-def create_session(invoke_id: str) -> str:
+def create_session() -> str:
     if not v2_negotiated:
         raise RuntimeError(
             "Agent Sessions unavailable: host did not negotiate protocol v2 for this session."
@@ -436,75 +428,40 @@ def create_session(invoke_id: str) -> str:
     result = _call(
         "agent/session.create",
         {
-            "kind": "agent",
             "agent_submode": "auto",
-            "label": "wefinance-ocr",
-            # This Tool never calls another executa tool, but the host grants
-            # every host tool (granted_tools: ["*"]) unless told otherwise.
-            # That's what broke Bill Scanner in production: OpenRouter routes
-            # sessions with any granted tools to endpoints supporting tool
-            # use, and the vision model we get hinted to (gemini-2.5-flash-
-            # image) has zero such endpoints, so the run 404s before it ever
-            # sees the image ("No endpoints found that support tool use",
-            # confirmed from a real host response, see wefinance-ocr 404 in
-            # the App Review thread).
-            "inherit_host_tools": False,
-            "metadata": {"executa_invoke_id": invoke_id},
+            "label": "WeFinance Bill Scanner",
+            "ttl_seconds": 300,
         },
         timeout=25,
     )
     return result["app_session_uuid"]
 
 
-def run_session(
-    invoke_id: str, app_session_uuid: str, content: str, attachments: list
-) -> str:
+def run_session(app_session_uuid: str, prompt: str, attachment: dict) -> str:
     result = _call(
         "agent/session.run",
         {
             "app_session_uuid": app_session_uuid,
-            "content": content,
-            "attachments": attachments,
-            # vision-capable model required or the run fails fast with
-            # APP_MODEL_NOT_VISION_CAPABLE (no silent fallback).
+            "content": prompt,
+            "attachments": [attachment],
+            # Pure model reply: no tool calls, so no tool-use-only routing.
+            "allowed_tools": [],
+            "recursion_limit": 2,
+            # "gemini" is the vision hint llm-and-agent.md itself uses; it
+            # routed to google/gemini-3-flash-preview in the 2026-09-22 probe.
             "modelPreferences": {"hints": [{"name": "gemini"}]},
-            "metadata": {"executa_invoke_id": invoke_id},
         },
-        # executa-lifecycle.md documents a 60s default invoke budget, but the
-        # shipped reference plugin waits up to 180s for its own agent runs --
-        # a real, unresolved conflict between the two authoritative-looking
-        # sources. Vision extraction is plausibly slower than plain sampling,
-        # so we lean toward the reference's number here rather than risk
-        # truncating legitimate slow runs; revisit once a real host confirms
-        # which one actually governs.
+        # executa-lifecycle.md documents a 60s default invoke budget; the
+        # shipped reference plugin waits up to 180s for its agent runs.
         timeout=90,
     )
-    # Buffered streaming (v2): host accumulates SSE frames and returns
-    # {run_id, stream_id, frames: [...], final}. The answer is on the
-    # terminal frame -- either event=="final" (text, or empty if the
-    # producer only emitted deltas) or a sentinel-only event=="complete"
-    # with no text at all (shipped reference plugin's documented pattern).
-    # Accumulate delta/token/message text along the way as a fallback so
-    # neither terminal shape silently returns empty.
     deltas: list = []
     final_text = ""
     for frame in result.get("frames", []):
         ev = frame.get("event")
+        if frame.get("error"):
+            raise RuntimeError(f"scanning backend rejected the run: {frame['error']}")
         if ev == "sse":
-            # Real host shape (not documented in executa-lifecycle.md's worked
-            # example): each 'sse' frame wraps an OpenAI-style streaming chat
-            # completion delta -- content text lives at
-            # choices[0].delta.content, alongside control-only deltas like
-            # task_info/processing_started/task_complete that carry no text.
-            # A routing/provider failure (e.g. OpenRouter 404 "no endpoints
-            # support tool use") also rides in on an 'sse' frame, as a
-            # top-level `error` string sibling to `choices` -- confirmed from
-            # a real production failure where this went unhandled and the
-            # whole 7-frame response got dumped as "no usable frame" instead.
-            if frame.get("error"):
-                raise RuntimeError(
-                    f"scanning backend rejected the run: {frame['error']}"
-                )
             for choice in frame.get("choices") or []:
                 delta_content = (choice.get("delta") or {}).get("content")
                 if isinstance(delta_content, str) and delta_content:
@@ -515,9 +472,6 @@ def run_session(
                 deltas.append(txt)
         elif ev == "final":
             final_text = (frame.get("text") or "").strip() or "".join(deltas)
-        elif ev == "complete":
-            if not final_text:
-                final_text = "".join(deltas)
     if final_text:
         return final_text
     final = result.get("final")
@@ -525,7 +479,8 @@ def run_session(
         return final["text"]
     if deltas:
         return "".join(deltas)
-    raise RuntimeError(f"agent/session.run returned no usable frame: {result!r}")
+    keys = sorted(result) if isinstance(result, dict) else type(result).__name__
+    raise RuntimeError(f"agent/session.run returned no text (reply keys: {keys})")
 
 
 def close_session(app_session_uuid: str) -> None:
@@ -534,15 +489,17 @@ def close_session(app_session_uuid: str) -> None:
             "agent/session.delete", {"app_session_uuid": app_session_uuid}, timeout=10
         )
     except Exception as exc:  # noqa: BLE001
+        # The host expires the session on its own TTL; a failed delete must
+        # not turn a successful scan into an error.
         print(f"session.delete failed (non-fatal): {exc}", file=sys.stderr)
 
 
 # --- Image payload sanitization ----------------------------------------------
-# The Anna host rejects agent/session.run's attachments[].data with a 400 if it
+# The Anna host rejects session.run's attachments[].data with a 400 if it
 # isn't clean base64. Callers (the Anna App UI, a browser file input, etc.) may
 # naturally hand us a full `data:image/jpeg;base64,...` URI or base64 wrapped
 # with newlines -- neither is clean base64, and the host's rejection surfaces
-# as an opaque 400 deep inside session.run with no hint about the real cause.
+# as an opaque 400 deep inside the call with no hint about the real cause.
 # Strip/validate here so a bad payload fails fast with an actionable message
 # instead of that opaque 400.
 
@@ -571,30 +528,30 @@ def _validate_base64_image(image_base64: str) -> str:
 # --- Tool logic --------------------------------------------------------------
 
 
-def extract_transactions(
-    invoke_id: str, image_base64: str, image_type: str, filename: str
-) -> list:
+def extract_transactions(image_base64: str, image_type: str) -> list:
     image_base64 = _validate_base64_image(image_base64)
     source_hash = hashlib.sha256(image_base64.encode("utf-8")).hexdigest()
+    if not re.fullmatch(r"image/[a-z0-9.+-]{1,40}", image_type or ""):
+        raise ValueError("image_type must be an image MIME type such as image/jpeg")
+    extension = image_type.split("/")[-1].split("+")[0]
+    attachment = {
+        "type": image_type,
+        "data": image_base64,
+        "filename": f"bill.{extension}",
+    }
 
-    app_session_uuid = create_session(invoke_id)
+    app_session_uuid = create_session()
     try:
-        raw_text = run_session(
-            invoke_id,
-            app_session_uuid,
-            OCR_PROMPT,
-            [
-                {
-                    "type": image_type,
-                    "data": image_base64,
-                    "filename": filename or "receipt.jpg",
-                }
-            ],
-        )
+        prompt = f"{OCR_PROMPT}\n\nToday's date: {date.today().isoformat()}"
+        raw_text = run_session(app_session_uuid, prompt, attachment)
     finally:
         close_session(app_session_uuid)
 
     parsed = _robust_json_parse(raw_text)
+    if parsed.get("error") == "no_image":
+        raise RuntimeError(
+            "The scanning model reported it could not see the image. Please try again."
+        )
     declared = parsed["transaction_count"]
     rows = parsed["transactions"]
     if declared != len(rows):
@@ -652,8 +609,6 @@ def handle(req: dict) -> dict:
         params = req.get("params") or {}
         tool = params.get("tool")
         args = params.get("arguments") or {}
-        ctx = params.get("context") or {}
-        invoke_id = str(ctx.get("invoke_id") or req_id)
 
         if tool != "extract_transactions":
             return {
@@ -664,7 +619,6 @@ def handle(req: dict) -> dict:
 
         image_base64 = args.get("image_base64", "")
         image_type = args.get("image_type", "")
-        filename = args.get("filename", "")
 
         if not image_base64 or not image_type:
             return {
@@ -677,9 +631,7 @@ def handle(req: dict) -> dict:
             }
 
         try:
-            transactions = extract_transactions(
-                invoke_id, image_base64, image_type, filename
-            )
+            transactions = extract_transactions(image_base64, image_type)
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,

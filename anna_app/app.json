@@ -2,12 +2,26 @@
   "slug": "wefinance",
   "name": "WeFinance",
   "category": "utilities",
-  "tagline": "Turn a photo of a bill into spending insight and explainable investment advice.",
-  "description": "WeFinance reads a photo of a bill, receipt, or payment screenshot and turns it into structured transactions, then answers financial questions and gives explainable, data-grounded investment recommendations -- all from what you actually spent, not a linked bank account.",
+  "tagline": "Photograph a bill or receipt. WeFinance logs the transactions, tracks your monthly budget, and answers money questions from what you actually spent.",
+  "description": "WeFinance turns bill photos into a spending record you can ask questions about. No bank login, no spreadsheet.\n\nScan a bill: upload a photo of a receipt, bill, or payment screenshot. The Bill Scanner reads the date, merchant, category, amount, and currency of each transaction and adds them to your list.\n\nOverview: set a monthly budget and see what you've spent, what's left, spending by month, and this month by category. Different currencies are totaled separately, never added together.\n\nAsk the advisor: ask things like \"Where did most of my money go this month?\" or \"Which category should I cut back on first?\" and get an answer based on your scanned transactions.\n\nGet recommendations: pick a risk profile, optionally add your income, goal, and time horizon, and get investment ideas. Each one lists the reasons behind it, tied to your own numbers.\n\nYour data: transactions and your budget are saved in your own Anna app storage. Images are sent to Anna's model service to be read and are not kept. One button clears everything you've scanned.\n\nWeFinance gives general, educational suggestions. It is not a licensed financial advisor.",
   "pricing_model": "free",
   "bundled_executas": {
-    "bill-scanner": { "path": "./executas/wefinance-ocr" },
-    "advisor-chat": { "path": "./executas/wefinance-chat" },
-    "investment-recommendations": { "path": "./executas/wefinance-recommend" }
-  }
+    "bill-scanner": {
+      "path": "./executas/wefinance-ocr"
+    },
+    "advisor-chat": {
+      "path": "./executas/wefinance-chat"
+    },
+    "investment-recommendations": {
+      "path": "./executas/wefinance-recommend"
+    }
+  },
+  "screenshots": [
+    "../assets/branding/screenshots/anna/01_scan.png",
+    "../assets/branding/screenshots/anna/02_overview.png",
+    "../assets/branding/screenshots/anna/03_recommendations.png"
+  ],
+  "homepage_url": "https://github.com/calderbuild/WeFinance",
+  "support_url": "https://github.com/calderbuild/WeFinance/issues",
+  "privacy_url": "https://github.com/calderbuild/WeFinance/blob/main/PRIVACY.md"
 }

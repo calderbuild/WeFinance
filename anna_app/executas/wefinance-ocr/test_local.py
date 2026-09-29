@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-"""Local smoke test for wefinance-ocr's plugin.py.
+"""Local smoke test for wefinance_ocr.py.
 
-Same host-simulation approach as the other two Tools' test_local.py: spawn
-the plugin as a real subprocess and play the "host" role ourselves. This one
-simulates the Agent Sessions round trip (agent/session.create ->
-agent/session.run -> agent/session.delete) instead of Sampling, since
-sampling/createMessage cannot carry image content.
-
-Wire shapes below (method names, agent/session.create's kind="agent" +
-agent_submode="auto", app_session_uuid, and session.run's buffered
-{frames: [...]} response) are confirmed against
-staging.anna.partners/developers/tools/executa-agent.md and
-.../developers/apps/llm-and-agent.md (2026-08-09), not guessed -- see the
-docstring in plugin.py for what changed from the first draft.
+Spawns the plugin as a real subprocess and plays the host: answers its
+agent/session.create -> agent/session.run -> agent/session.delete reverse
+RPCs with the frame shapes the real host returns (see wefinance_ocr.py's
+module docstring). Real-model accuracy is checked separately against the
+live host, not here.
 """
 
 import base64
@@ -24,23 +17,22 @@ from pathlib import Path
 PLUGIN = Path(__file__).parent / "wefinance_ocr.py"
 
 FAKE_OCR_RESPONSE = {
-    "transaction_count": 2,
+    "transaction_count": 3,
     "transactions": [
         {
             "date": "2026-08-01",
-            "merchant": "星巴克",
-            "category": "餐饮",
-            "amount": 45.0,
-            "currency": "CNY",
-            "partial_data": False,
-            "inferred_fields": [],
+            "merchant": "Blue Bottle Coffee",
+            "category": "Dining",
+            "amount": 5.5,
+            "currency": "USD",
         },
         {
             "date": "2026-08-02",
-            "marchant": "滴滴出行",  # deliberate typo, exercises TYPO_FIELD_MAP
-            "catagory": "交通",
+            "marchant": "Metro Card",  # deliberate typos, exercise TYPO_FIELD_MAP
+            "catagory": "Transport",
             "amout": 32.5,
         },
+        {"date": "2026-08-03", "merchant": "Refund", "amount": -5.5},
     ],
 }
 
@@ -63,7 +55,121 @@ def recv(proc: subprocess.Popen) -> dict:
     return json.loads(line)
 
 
+def sse_result(*texts: str) -> dict:
+    return {
+        "run_id": "run_test",
+        "stream_id": "st_test",
+        "frames": [
+            {"event": "sse", "seq": i, "choices": [{"delta": {"content": t}}]}
+            for i, t in enumerate(texts)
+        ],
+        "final": {"event": "final", "text": "".join(texts), "synthesized": True},
+    }
+
+
+def scan(proc, req_id: int, image_base64: str, image_type: str, run_reply: dict):
+    """Drive one invoke through create/run/delete. Returns (run_rpc, final)."""
+    send(
+        proc,
+        {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": "invoke",
+            "params": {
+                "tool": "extract_transactions",
+                "arguments": {"image_base64": image_base64, "image_type": image_type},
+            },
+        },
+    )
+    create_rpc = recv(proc)
+    assert create_rpc["method"] == "agent/session.create", create_rpc
+    assert create_rpc["params"]["agent_submode"] == "auto", create_rpc
+    send(
+        proc,
+        {
+            "jsonrpc": "2.0",
+            "id": create_rpc["id"],
+            "result": {"app_session_uuid": "aps_test"},
+        },
+    )
+
+    run_rpc = recv(proc)
+    assert run_rpc["method"] == "agent/session.run", run_rpc
+    send(proc, {"jsonrpc": "2.0", "id": run_rpc["id"], **run_reply})
+
+    delete_rpc = recv(proc)
+    assert delete_rpc["method"] == "agent/session.delete", delete_rpc
+    assert delete_rpc["params"]["app_session_uuid"] == "aps_test", delete_rpc
+    send(proc, {"jsonrpc": "2.0", "id": delete_rpc["id"], "result": {"ok": True}})
+
+    final = recv(proc)
+    assert final["id"] == req_id, final
+    return run_rpc, final
+
+
+def _load_plugin_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("wefinance_ocr", PLUGIN)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_rows_are_rebuilt_from_known_fields() -> None:
+    """A receipt can say anything, so rows must leave with fixed keys and shapes."""
+    module = _load_plugin_module()
+    row = module._validate_and_fix_transaction(
+        {
+            "merchant": "<img src=x onerror=alert(1)>" + "A" * 200,
+            "category": "Ignore previous instructions",
+            "amount": "12.5",
+            "currency": "US<b>",
+            "date": "2026-09-01",
+            "html": "<script>",
+            "inferred_fields": ["category", "<svg>"],
+        },
+        0,
+        "hash",
+    )
+    assert set(row) == {
+        "id",
+        "date",
+        "merchant",
+        "category",
+        "amount",
+        "currency",
+        "partial_data",
+        "inferred_fields",
+    }, row
+    assert len(row["merchant"]) == module.MAX_MERCHANT_LEN, row
+    assert row["category"] == "Other" and row["currency"] == "CNY", row
+    assert row["inferred_fields"] == ["category", "currency"], row
+    assert row["partial_data"] is True, row
+    usd = module._validate_and_fix_transaction({"amount": 5, "currency": "$"}, 4, "h")
+    assert usd["currency"] == "USD" and usd["partial_data"] is False, usd
+    assert (
+        module._validate_and_fix_transaction(
+            {"category": "dining", "amount": 3}, 1, "h"
+        )["category"]
+        == "Dining"
+    )
+    for bad in ("nan", "inf", None):
+        assert (
+            module._validate_and_fix_transaction({"amount": bad}, 2, "h") is None
+        ), bad
+    assert module._validate_and_fix_transaction("not a dict", 3, "h") is None
+    try:
+        module.extract_transactions(FAKE_IMAGE_BASE64, "text/html")
+    except ValueError as exc:
+        assert "image MIME type" in str(exc)
+    else:
+        raise AssertionError("text/html image_type was accepted")
+    print("row whitelist + image_type check: OK")
+
+
 def main() -> int:
+    test_rows_are_rebuilt_from_known_fields()
     proc = subprocess.Popen(
         [sys.executable, str(PLUGIN)],
         stdin=subprocess.PIPE,
@@ -77,15 +183,12 @@ def main() -> int:
     )
 
     try:
-        # 1. describe
         send(proc, {"jsonrpc": "2.0", "id": 1, "method": "describe"})
         resp = recv(proc)
         assert resp["result"]["name"] == "wefinance-ocr", resp
-        assert resp["result"]["tools"][0]["name"] == "extract_transactions", resp
         assert "llm.agent.auto" in resp["result"]["host_capabilities"], resp
         print("describe: OK")
 
-        # 2. initialize
         send(
             proc,
             {
@@ -95,11 +198,9 @@ def main() -> int:
                 "params": {"protocolVersion": "2.0"},
             },
         )
-        resp = recv(proc)
-        assert resp["result"]["protocolVersion"] == "2.0", resp
+        assert recv(proc)["result"]["protocolVersion"] == "2.0"
         print("initialize: OK")
 
-        # 3. invoke with missing image -> should fail gracefully
         send(
             proc,
             {
@@ -112,267 +213,55 @@ def main() -> int:
                 },
             },
         )
-        resp = recv(proc)
-        assert resp["result"]["success"] is False, resp
+        assert recv(proc)["result"]["success"] is False
         print("missing-image guard: OK")
 
-        # 4. real invoke -> plugin should create a session, then run it with
-        #    the image as an attachment
-        send(
+        # Happy path: the image rides on session.run's attachments, tools off.
+        body = json.dumps(FAKE_OCR_RESPONSE)
+        run_rpc, final = scan(
             proc,
-            {
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "invoke",
-                "params": {
-                    "tool": "extract_transactions",
-                    "arguments": {
-                        "image_base64": FAKE_IMAGE_BASE64,
-                        "image_type": "image/jpeg",
-                        "filename": "receipt.jpg",
-                    },
-                    "context": {"invoke_id": "test-invoke-3"},
-                },
-            },
+            4,
+            FAKE_IMAGE_BASE64,
+            "image/jpeg",
+            {"result": sse_result(body[:40], body[40:])},
         )
-
-        create_rpc = recv(proc)
-        assert create_rpc["method"] == "agent/session.create", create_rpc
-        assert create_rpc["params"]["kind"] == "agent", create_rpc
-        assert create_rpc["params"]["agent_submode"] == "auto", create_rpc
-        assert create_rpc["params"]["inherit_host_tools"] is False, (
-            "must opt out of the default granted_tools=['*'] -- that's what "
-            "made OpenRouter require tool-use support and 404 in production",
-            create_rpc,
-        )
-        print("agent/session.create request: OK (well-formed)")
-
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": create_rpc["id"],
-                "result": {
-                    "app_session_uuid": "sess-fake-1",
-                    "thread_id": "thr-fake-1",
-                    "agent_submode": "auto",
-                    "granted_tools": [],
-                },
-            },
-        )
-
-        run_rpc = recv(proc)
-        assert run_rpc["method"] == "agent/session.run", run_rpc
-        assert run_rpc["params"]["app_session_uuid"] == "sess-fake-1", run_rpc
-        assert run_rpc["params"]["modelPreferences"]["hints"][0]["name"] == "gemini", (
-            run_rpc
-        )
-        attachments = run_rpc["params"]["attachments"]
-        assert len(attachments) == 1, run_rpc
-        assert attachments[0]["type"] == "image/jpeg", run_rpc
-        assert attachments[0]["data"] == FAKE_IMAGE_BASE64, run_rpc
-        assert attachments[0]["filename"] == "receipt.jpg", run_rpc
-        assert "transaction_count" in run_rpc["params"]["content"], run_rpc
-        print(
-            "agent/session.run request: OK (attachment + modelPreferences well-formed)"
-        )
-
-        # buffered-streaming response shape: {run_id, stream_id, frames: [...], final}
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": run_rpc["id"],
-                "result": {
-                    "run_id": "run-fake-1",
-                    "stream_id": "strm-fake-1",
-                    "frames": [
-                        {"event": "started"},
-                        {
-                            "event": "final",
-                            "text": json.dumps(FAKE_OCR_RESPONSE),
-                            "usage": {"totalTokens": 123},
-                        },
-                    ],
-                    "final": True,
-                },
-            },
-        )
-
-        close_rpc = recv(proc)
-        assert close_rpc["method"] == "agent/session.delete", close_rpc
-        assert close_rpc["params"]["app_session_uuid"] == "sess-fake-1", close_rpc
-        print("agent/session.delete request: OK")
-
-        send(
-            proc,
-            {"jsonrpc": "2.0", "id": close_rpc["id"], "result": {"status": "deleted"}},
-        )
-
-        final = recv(proc)
-        assert final["id"] == 4, final
+        params = run_rpc["params"]
+        assert params["attachments"] == [
+            {"type": "image/jpeg", "data": FAKE_IMAGE_BASE64, "filename": "bill.jpeg"}
+        ], params
+        assert params["allowed_tools"] == [], params
+        assert params["modelPreferences"]["hints"][0]["name"] == "gemini", params
+        assert "Today's date: 20" in params["content"], params
         assert final["result"]["success"] is True, final
         txns = final["result"]["data"]["transactions"]
-        assert len(txns) == 2, txns
-        assert txns[0]["merchant"] == "星巴克", txns
-        assert txns[0]["amount"] == 45.0, txns
-        # typo-field row: marchant/catagory/amout must have been fixed up,
-        # and it must still get a generated id + default currency/category
-        assert txns[1]["merchant"] == "滴滴出行", txns
-        assert txns[1]["category"] == "交通", txns
-        assert txns[1]["amount"] == 32.5, txns
-        assert txns[1]["currency"] == "CNY", txns
-        assert txns[1]["id"], txns
+        assert [t["merchant"] for t in txns] == [
+            "Blue Bottle Coffee",
+            "Metro Card",
+            "Refund",
+        ], txns
+        assert txns[1]["category"] == "Transport" and txns[1]["amount"] == 32.5, txns
+        assert txns[2]["amount"] == -5.5 and txns[2]["category"] == "Other", txns
+        assert all(t["id"] for t in txns), txns
         print(
-            "invoke extract_transactions: OK (typo fixup + defaults + id generation correct)"
+            "scan: OK (attachments + allowed_tools=[] + split sse frames + typo fixup + refund)"
         )
 
-        # 5. a run terminating via sentinel-only event=="complete" (no text)
-        #    must fall back to accumulated delta/token/message text, matching
-        #    the shipped reference plugin's documented streaming pattern.
-        simple_response = {
-            "transaction_count": 1,
-            "transactions": [
-                {
-                    "date": "2026-08-03",
-                    "merchant": "Test Shop",
-                    "category": "购物",
-                    "amount": 10.0,
-                    "currency": "CNY",
-                }
-            ],
-        }
-        simple_text = json.dumps(simple_response)
-        half = len(simple_text) // 2
-        send(
+        run_rpc, final = scan(
             proc,
-            {
-                "jsonrpc": "2.0",
-                "id": 5,
-                "method": "invoke",
-                "params": {
-                    "tool": "extract_transactions",
-                    "arguments": {
-                        "image_base64": FAKE_IMAGE_BASE64,
-                        "image_type": "image/jpeg",
-                    },
-                    "context": {"invoke_id": "test-invoke-complete"},
-                },
-            },
+            5,
+            f"data:image/png;base64,{FAKE_IMAGE_BASE64}",
+            "image/png",
+            {"result": sse_result(body)},
         )
-        create_rpc = recv(proc)
-        assert create_rpc["method"] == "agent/session.create", create_rpc
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": create_rpc["id"],
-                "result": {"app_session_uuid": "sess-fake-2"},
-            },
-        )
-        run_rpc = recv(proc)
-        assert run_rpc["method"] == "agent/session.run", run_rpc
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": run_rpc["id"],
-                "result": {
-                    "run_id": "run-fake-2",
-                    "stream_id": "strm-fake-2",
-                    "frames": [
-                        {"event": "delta", "text": simple_text[:half]},
-                        {"event": "delta", "text": simple_text[half:]},
-                        {"event": "complete"},
-                    ],
-                },
-            },
-        )
-        close_rpc = recv(proc)
-        assert close_rpc["method"] == "agent/session.delete", close_rpc
-        send(
-            proc,
-            {"jsonrpc": "2.0", "id": close_rpc["id"], "result": {"status": "deleted"}},
-        )
-        final = recv(proc)
-        assert final["id"] == 5, final
+        assert run_rpc["params"]["attachments"][0]["data"] == FAKE_IMAGE_BASE64, run_rpc
         assert final["result"]["success"] is True, final
-        txns = final["result"]["data"]["transactions"]
-        assert len(txns) == 1 and txns[0]["merchant"] == "Test Shop", final
-        print("sentinel 'complete' frame: OK (fell back to accumulated deltas)")
+        print("data: URI prefix: OK (stripped before forwarding)")
 
-        # 5a. image_base64 arrives as a data: URI (the natural shape a browser
-        #     file input / Anna App UI FileReader would hand us) -> must be
-        #     stripped to clean base64 before it's forwarded as an attachment,
-        #     and the sanitized (not raw) value must be what session.run sees.
-        #     This is the fix for the Anna App Review's Bill Scanner 400:
-        #     "the image payload is not accepted as valid base64 image data."
-        data_uri = f"data:image/png;base64,{FAKE_IMAGE_BASE64}"
         send(
             proc,
             {
                 "jsonrpc": "2.0",
-                "id": 51,
-                "method": "invoke",
-                "params": {
-                    "tool": "extract_transactions",
-                    "arguments": {
-                        "image_base64": data_uri,
-                        "image_type": "image/png",
-                    },
-                    "context": {"invoke_id": "test-invoke-datauri"},
-                },
-            },
-        )
-        create_rpc = recv(proc)
-        assert create_rpc["method"] == "agent/session.create", create_rpc
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": create_rpc["id"],
-                "result": {"app_session_uuid": "sess-fake-datauri"},
-            },
-        )
-        run_rpc = recv(proc)
-        assert run_rpc["method"] == "agent/session.run", run_rpc
-        assert run_rpc["params"]["attachments"][0]["data"] == FAKE_IMAGE_BASE64, (
-            "data: URI prefix must be stripped before forwarding",
-            run_rpc,
-        )
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": run_rpc["id"],
-                "result": {
-                    "run_id": "run-fake-datauri",
-                    "stream_id": "strm-fake-datauri",
-                    "frames": [
-                        {"event": "final", "text": json.dumps(FAKE_OCR_RESPONSE)}
-                    ],
-                    "final": True,
-                },
-            },
-        )
-        close_rpc = recv(proc)
-        assert close_rpc["method"] == "agent/session.delete", close_rpc
-        send(
-            proc,
-            {"jsonrpc": "2.0", "id": close_rpc["id"], "result": {"status": "deleted"}},
-        )
-        final = recv(proc)
-        assert final["id"] == 51, final
-        assert final["result"]["success"] is True, final
-        print("data: URI prefix: OK (stripped before forwarding to session.run)")
-
-        # 5b. genuinely invalid base64 -> fails fast with a clear message,
-        #     never silently forwarded to session.run.
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": 52,
+                "id": 6,
                 "method": "invoke",
                 "params": {
                     "tool": "extract_transactions",
@@ -384,121 +273,89 @@ def main() -> int:
             },
         )
         resp = recv(proc)
-        assert resp["result"]["success"] is False, resp
-        assert "not valid base64" in resp["result"]["error"], resp
-        print(
-            "invalid base64: OK (rejected fast with a clear error, no session opened)"
-        )
+        assert (
+            resp["result"]["success"] is False
+            and "not valid base64" in resp["result"]["error"]
+        ), resp
+        print("invalid base64: OK (rejected before any session is opened)")
 
-        # 5c. real production failure shape: a provider/routing error (e.g.
-        #     OpenRouter 404 "no endpoints support tool use") rides in on a
-        #     normal event=="sse" frame as a top-level `error` string sibling
-        #     to `choices`, then a stream_end frame, then a raw "[DONE]" --
-        #     none of which carry usable content. Must surface a short,
-        #     diagnosable error, not silently fall through to the generic
-        #     "no usable frame" fallback with the whole response dumped.
-        send(
+        _, final = scan(
             proc,
+            7,
+            FAKE_IMAGE_BASE64,
+            "image/jpeg",
             {
-                "jsonrpc": "2.0",
-                "id": 53,
-                "method": "invoke",
-                "params": {
-                    "tool": "extract_transactions",
-                    "arguments": {
-                        "image_base64": FAKE_IMAGE_BASE64,
-                        "image_type": "image/jpeg",
-                    },
-                    "context": {"invoke_id": "test-invoke-routing-404"},
-                },
+                "error": {
+                    "code": -32046,
+                    "message": "upstream error: boom",
+                    "data": {"errorCode": "PROVIDER_ERROR"},
+                }
             },
         )
-        create_rpc = recv(proc)
-        assert create_rpc["method"] == "agent/session.create", create_rpc
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": create_rpc["id"],
-                "result": {"app_session_uuid": "sess-fake-404"},
-            },
-        )
-        run_rpc = recv(proc)
-        assert run_rpc["method"] == "agent/session.run", run_rpc
-        send(
-            proc,
-            {
-                "jsonrpc": "2.0",
-                "id": run_rpc["id"],
-                "result": {
-                    "run_id": "run-fake-404",
-                    "stream_id": "strm-fake-404",
-                    "frames": [
-                        {"event": "started"},
-                        {
-                            "event": "run_meta",
-                            "inherit_host_tools": True,
-                            "granted_tools": ["*"],
-                            "model": "google/gemini-2.5-flash-image",
-                            "provider": "openrouter",
-                        },
-                        {
-                            "event": "sse",
-                            "error": (
-                                "Error code: 404 - {'error': {'message': "
-                                "'No endpoints found that support tool use.'"
-                                "}}"
-                            ),
-                        },
-                        {
-                            "event": "sse",
-                            "event_type": "stream_end",
-                            "reason": "task_failed",
-                        },
-                        {"event": "raw", "text": "[DONE]"},
-                    ],
-                    "final": None,
-                },
-            },
-        )
-        close_rpc = recv(proc)
-        assert close_rpc["method"] == "agent/session.delete", close_rpc
-        send(
-            proc,
-            {"jsonrpc": "2.0", "id": close_rpc["id"], "result": {"status": "deleted"}},
-        )
-        final = recv(proc)
-        assert final["id"] == 53, final
-        assert final["result"]["success"] is False, final
-        err = final["result"]["error"]
-        assert "No endpoints found that support tool use" in err, err
-        assert len(err) < 300, ("error must stay short, not dump all frames", err)
-        print("routing/provider 404 on an sse frame: OK (short, diagnosable error)")
+        assert (
+            final["result"]["success"] is False and "boom" in final["result"]["error"]
+        ), final
+        print("run JSON-RPC error: OK (surfaced, session still deleted)")
 
-        # 6. health -- executa-lifecycle.md's documented shape
-        send(proc, {"jsonrpc": "2.0", "id": 6, "method": "health"})
-        resp = recv(proc)
-        assert resp["result"]["status"] == "ready", resp
+        error_frame = {
+            "run_id": "r",
+            "frames": [{"event": "sse", "error": "No endpoints found"}],
+        }
+        _, final = scan(
+            proc, 8, FAKE_IMAGE_BASE64, "image/jpeg", {"result": error_frame}
+        )
+        assert (
+            final["result"]["success"] is False
+            and "No endpoints" in final["result"]["error"]
+        ), final
+        print("provider error frame: OK (surfaced)")
+
+        _, final = scan(
+            proc,
+            9,
+            FAKE_IMAGE_BASE64,
+            "image/jpeg",
+            {"result": sse_result("Sorry, I can't see any image here.")},
+        )
+        assert (
+            final["result"]["success"] is False
+            and "couldn't read a transaction list" in final["result"]["error"]
+            and "see any image" not in final["result"]["error"]
+        ), final
+        print("non-JSON reply: OK (error, not a silent zero-transaction result)")
+
+        no_image = json.dumps(
+            {"transaction_count": 0, "transactions": [], "error": "no_image"}
+        )
+        _, final = scan(
+            proc, 10, FAKE_IMAGE_BASE64, "image/jpeg", {"result": sse_result(no_image)}
+        )
+        assert (
+            final["result"]["success"] is False
+            and "could not see" in final["result"]["error"]
+        ), final
+        print("no_image reply: OK (error)")
+
+        empty = json.dumps({"transaction_count": 0, "transactions": []})
+        _, final = scan(
+            proc, 11, FAKE_IMAGE_BASE64, "image/jpeg", {"result": sse_result(empty)}
+        )
+        assert final["result"] == {"success": True, "data": {"transactions": []}}, final
+        print("genuinely empty bill: OK (success with zero rows)")
+
+        send(proc, {"jsonrpc": "2.0", "id": 12, "method": "health"})
+        assert recv(proc)["result"]["status"] == "ready"
         print("health: OK")
 
-        # 7. malformed JSON on stdin -> documented -32700 parse error, and
-        #    the reader thread must survive it (not silently die).
-        assert proc.stdin is not None
         proc.stdin.write("not valid json\n")
         proc.stdin.flush()
-        resp = recv(proc)
-        assert resp["error"]["code"] == -32700, resp
+        assert recv(proc)["error"]["code"] == -32700
         print("malformed JSON: OK (-32700, reader thread survived)")
 
-        # 8. shutdown handler
-        send(proc, {"jsonrpc": "2.0", "id": 8, "method": "shutdown"})
-        resp = recv(proc)
-        assert resp["result"]["ok"] is True, resp
-        print("shutdown: OK")
-
-        assert proc.poll() is None, "plugin exited after handling requests (pitfall #1)"
-        print("long-running check: OK (process still alive)")
-
+        send(proc, {"jsonrpc": "2.0", "id": 13, "method": "shutdown"})
+        assert recv(proc)["result"]["ok"] is True
+        assert proc.poll() is None, "plugin exited after handling requests"
+        print("shutdown + long-running: OK")
     finally:
         proc.terminate()
         try:
