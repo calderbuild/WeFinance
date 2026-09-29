@@ -61,7 +61,7 @@ from datetime import date, datetime
 MANIFEST = {
     "name": "wefinance-ocr",
     "display_name": "WeFinance Bill Scanner",
-    "version": "0.2.4",
+    "version": "0.2.5",
     "description": "Extract structured transactions from a photo of a bill, receipt, or payment screenshot.",
     "author": "calderbuild",
     "host_capabilities": ["llm.sample", "llm.agent.auto"],
@@ -272,7 +272,14 @@ MAX_MERCHANT_LEN = 80
 INFERABLE_FIELDS = {"date", "merchant", "category", "amount", "currency"}
 # The prompt asks for ISO codes, but a symbol sometimes slips through. Map the
 # common ones; anything else falls back to CNY and is marked as a guess.
-CURRENCY_SYMBOLS = {"$": "USD", "¥": "CNY", "元": "CNY", "RMB": "CNY", "€": "EUR", "£": "GBP"}
+CURRENCY_SYMBOLS = {
+    "$": "USD",
+    "¥": "CNY",
+    "元": "CNY",
+    "RMB": "CNY",
+    "€": "EUR",
+    "£": "GBP",
+}
 
 
 def _validate_and_fix_transaction(item: dict, idx: int, source_hash: str):
@@ -298,7 +305,11 @@ def _validate_and_fix_transaction(item: dict, idx: int, source_hash: str):
     currency = str(raw.get("currency") or "").strip().upper()
     currency = CURRENCY_SYMBOLS.get(currency, currency)
     inferred = raw.get("inferred_fields")
-    inferred = [f for f in inferred if f in INFERABLE_FIELDS] if isinstance(inferred, list) else []
+    inferred = (
+        [f for f in inferred if f in INFERABLE_FIELDS]
+        if isinstance(inferred, list)
+        else []
+    )
     partial = raw.get("partial_data") is True
     if not re.fullmatch(r"[A-Z]{3}", currency):
         currency, partial = "CNY", True
@@ -351,6 +362,19 @@ AGENT_ERROR_CODES_BY_NUMBER = {
 }
 
 
+def _plain_detail(error) -> str:
+    """The host's error message if it is short plain text, else "".
+
+    Anna support asked for upstream detail in errors, but an unmapped code
+    once carried a whole Cloudflare 520 HTML page, so markup and long bodies
+    go to stderr only."""
+    msg = error.get("message") if isinstance(error, dict) else None
+    if isinstance(msg, str) and "<" not in msg and len(msg) <= 200:
+        return msg
+    print(f"host error detail withheld: {str(error)[:500]}", file=sys.stderr)
+    return ""
+
+
 def _friendly_agent_error(error: dict) -> str:
     data = error.get("data") if isinstance(error, dict) else None
     code_name: str = ""
@@ -363,7 +387,12 @@ def _friendly_agent_error(error: dict) -> str:
             if isinstance(code_num, int)
             else ""
         )
-    return AGENT_ERROR_MESSAGES.get(code_name, str(error))
+    detail = _plain_detail(error)
+    base = AGENT_ERROR_MESSAGES.get(
+        code_name,
+        f"The scanning backend had an error ({code_name or 'unknown'}). Try again in a moment.",
+    )
+    return f"{base} ({detail})" if detail else base
 
 
 # --- Reverse-RPC (Agent Sessions) plumbing ----------------------------------
@@ -460,7 +489,11 @@ def run_session(app_session_uuid: str, prompt: str, attachment: dict) -> str:
     for frame in result.get("frames", []):
         ev = frame.get("event")
         if frame.get("error"):
-            raise RuntimeError(f"scanning backend rejected the run: {frame['error']}")
+            detail = _plain_detail({"message": frame["error"]})
+            raise RuntimeError(
+                "The scanning backend rejected the run"
+                + (f": {detail}" if detail else ". Try again in a moment.")
+            )
         if ev == "sse":
             for choice in frame.get("choices") or []:
                 delta_content = (choice.get("delta") or {}).get("content")

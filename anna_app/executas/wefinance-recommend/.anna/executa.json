@@ -1,0 +1,8 @@
+{
+  "$schema": "anna-executa-identity/v1",
+  "host": "https://anna.partners",
+  "executa_id": 1091,
+  "tool_id": "tool-calderbuild-wefinance-investment-recommendations-r2q5jdey",
+  "slug": "wefinance-recommend",
+  "executa_type": "tool"
+}

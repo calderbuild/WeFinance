@@ -1,0 +1,8 @@
+{
+  "$schema": "anna-executa-identity/v1",
+  "host": "https://anna.partners",
+  "executa_id": 1090,
+  "tool_id": "tool-calderbuild-wefinance-advisor-chat-zm45qs9z",
+  "slug": "wefinance-chat",
+  "executa_type": "tool"
+}

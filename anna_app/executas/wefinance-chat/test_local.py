@@ -32,6 +32,15 @@ def recv(proc: subprocess.Popen) -> dict:
     return json.loads(line)
 
 
+def _load_plugin_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("wefinance_chat", PLUGIN)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_transaction_block_cannot_be_closed_early() -> None:
     import importlib.util
 
@@ -52,7 +61,28 @@ def test_transaction_block_cannot_be_closed_early() -> None:
     print("transaction block delimiting: OK")
 
 
+def test_raw_upstream_page_never_reaches_user() -> None:
+    """A Cloudflare 520 HTML body once showed up verbatim in the Scan tab."""
+    import contextlib
+    import io
+
+    module = _load_plugin_module()
+    html = {
+        "code": -32003,
+        "message": 'app_agent_run HTTP 520: <!DOCTYPE html> <html class="no-js">',
+        "data": {"errorCode": "provider_error"},
+    }
+    with contextlib.redirect_stderr(io.StringIO()):
+        msg = module._friendly_sampling_error(html)
+    assert "<" not in msg and "DOCTYPE" not in msg, msg
+    assert "provider_error" in msg, msg
+    plain = {"code": -32003, "message": "model quota exceeded"}
+    assert "model quota exceeded" in module._friendly_sampling_error(plain)
+    print("raw upstream page withheld: OK")
+
+
 def main() -> int:
+    test_raw_upstream_page_never_reaches_user()
     test_transaction_block_cannot_be_closed_early()
     proc = subprocess.Popen(
         [sys.executable, str(PLUGIN)],
