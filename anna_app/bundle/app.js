@@ -74,15 +74,30 @@ function renderTransactionTable(transactions) {
   for (const t of transactions) {
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td>${esc(t.date)}</td>
-      <td>${esc(t.merchant)}</td>
-      <td>${esc(t.category)}</td>
-      <td>${esc(t.amount)}</td>
-      <td>${esc(t.currency)}</td>
+      <td class="date">${esc(t.date)}</td>
+      <td><div class="merchant"><span>${esc(t.merchant)}</span><i class="leader"></i></div>
+        <div class="category">${esc(t.category)}</div></td>
+      <td class="num">${esc(formatMoney(t.amount, currencyOf(t), 2))}</td>
     `;
     tbody.appendChild(row);
   }
-  table.hidden = transactions.length === 0;
+
+  // One total per currency: yuan and dollars don't add up.
+  const totals = new Map();
+  for (const t of transactions) {
+    totals.set(currencyOf(t), (totals.get(currencyOf(t)) || 0) + (Number(t.amount) || 0));
+  }
+  table.querySelector("tfoot").innerHTML = [...totals.entries()]
+    .map(
+      ([currency, sum]) =>
+        `<tr><td colspan="2">Total ${esc(currency)}</td><td class="num">${esc(formatMoney(sum, currency, 2))}</td></tr>`
+    )
+    .join("");
+
+  const empty = transactions.length === 0;
+  table.hidden = empty;
+  document.getElementById("scan-receipt").hidden = empty;
+  document.getElementById("clear-transactions").hidden = empty;
 }
 
 function refreshTransactionCounts() {
@@ -119,18 +134,14 @@ function monthKey(dateStr) {
   return typeof dateStr === "string" ? dateStr.slice(0, 7) : "";
 }
 
-function formatMoney(amount, currency) {
+function formatMoney(amount, currency, digits = 0) {
   const value = Number(amount || 0);
+  const fraction = { minimumFractionDigits: digits, maximumFractionDigits: digits };
   try {
-    return value.toLocaleString(undefined, {
-      style: "currency",
-      currency,
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    });
+    return value.toLocaleString(undefined, { style: "currency", currency, ...fraction });
   } catch {
     // Not an ISO 4217 code this browser knows: show the code, don't guess a symbol.
-    return `${Math.round(value).toLocaleString()} ${currency}`;
+    return `${value.toLocaleString(undefined, fraction)} ${currency}`;
   }
 }
 
@@ -398,10 +409,13 @@ function renderRecommendations(recommendations) {
     card.className = "rec-card";
     const steps = (rec.rationale_steps || []).map((s) => `<li>${esc(s)}</li>`).join("");
     card.innerHTML = `
-      <h3>${esc(rec.title)}</h3>
-      <span class="risk-level">${esc(rec.risk_level)}</span>
+      <div class="rec-head">
+        <h3>${esc(rec.title)}</h3>
+        <span class="risk-level">Risk: ${esc(rec.risk_level)}</span>
+      </div>
       <p>${esc(rec.summary)}</p>
-      <ul>${steps}</ul>
+      <div class="rec-why">How this was worked out</div>
+      <ol>${steps}</ol>
     `;
     container.appendChild(card);
   }
@@ -460,8 +474,8 @@ async function main() {
   ]);
   if (storedTransactions?.exists && Array.isArray(storedTransactions.value)) {
     state.transactions = storedTransactions.value;
-    renderTransactionTable(state.transactions);
   }
+  renderTransactionTable(state.transactions);
   state.budgets = migrateBudgets(
     storedBudgets?.exists ? storedBudgets.value : null,
     legacyBudget?.exists ? legacyBudget.value : null,
