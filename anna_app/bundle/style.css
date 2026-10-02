@@ -243,6 +243,11 @@ button:disabled {
   border-color: var(--text-dim);
 }
 
+.dropzone:has(input:focus-visible) {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+
 .dropzone input {
   position: absolute;
   inset: 0;
