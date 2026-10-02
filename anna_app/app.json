@@ -2,8 +2,8 @@
   "slug": "wefinance",
   "name": "WeFinance",
   "category": "utilities",
-  "tagline": "Photograph a bill or receipt. WeFinance logs the transactions, tracks your monthly budget, and answers money questions from what you actually spent.",
-  "description": "WeFinance turns bill photos into a spending record you can ask questions about. No bank login, no spreadsheet.\n\nScan a bill: upload a photo of a receipt, bill, or payment screenshot. The Bill Scanner reads the date, merchant, category, amount, and currency of each transaction and adds them to your list.\n\nOverview: set a monthly budget and see what you've spent, what's left, spending by month, and this month by category. Different currencies are totaled separately, never added together.\n\nAsk the advisor: ask things like \"Where did most of my money go this month?\" or \"Which category should I cut back on first?\" and get an answer based on your scanned transactions.\n\nGet recommendations: pick a risk profile, optionally add your income, goal, and time horizon, and get investment ideas. Each one lists the reasons behind it, tied to your own numbers.\n\nYour data: transactions and your budget are saved in your own Anna app storage. Images are sent to Anna's model service to be read and are not kept. One button clears everything you've scanned.\n\nWeFinance gives general, educational suggestions. It is not a licensed financial advisor.",
+  "tagline": "Snap a receipt. See where the money went.",
+  "description": "Take a photo of a receipt, bill or payment screenshot and WeFinance turns it into transactions you can check line by line. It keeps a monthly budget per currency, answers questions like \"can I afford this?\" from what you actually spent, and suggests where to put the surplus, showing every step of how it got there. No bank login, no linked accounts.",
   "pricing_model": "free",
   "bundled_executas": {
     "bill-scanner": {
@@ -23,5 +23,6 @@
   ],
   "homepage_url": "https://github.com/calderbuild/WeFinance",
   "support_url": "https://github.com/calderbuild/WeFinance/issues",
-  "privacy_url": "https://github.com/calderbuild/WeFinance/blob/main/PRIVACY.md"
+  "privacy_url": "https://github.com/calderbuild/WeFinance/blob/main/PRIVACY.md",
+  "logo_file": "../assets/branding/wefinance_logo_512.png"
 }
