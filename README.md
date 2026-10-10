@@ -2,48 +2,66 @@
 
 English | **[中文](./README_zh-CN.md)**
 
-> **AI-Powered Personal Finance Assistant** - Vision LLM technology for transforming bill images into actionable financial insights
+> AI personal finance assistant. Take a photo of a bill and a vision LLM turns it into structured transactions, then WeFinance tracks your budget, flags unusual spending, and explains its advice.
 
 [![Live Demo](https://img.shields.io/badge/Demo-Live-success)](https://wefinance-copilot.streamlit.app)
+[![Anna App Store](https://img.shields.io/badge/Anna-App%20Store-orange)](https://anna.partners/store/@calderbuild/wefinance?ref=github)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/calderbuild/WeFinance?style=social)](https://github.com/calderbuild/WeFinance)
 
-**Try it on Anna**: [WeFinance in the Anna App Store](https://anna.partners/store/@calderbuild/wefinance?ref=github). Scan a bill, track a monthly budget, and ask questions about your spending, inside the Anna desktop or cloud agent.
+**Award**: Excellence Award, 12th Nvidia Sky Hackathon.
 
-**Live Demo**: [https://wefinance-copilot.streamlit.app](https://wefinance-copilot.streamlit.app)
+## Try It
+
+- **On Anna**: [WeFinance in the Anna App Store](https://anna.partners/store/@calderbuild/wefinance?ref=github). Scan a bill, track a monthly budget, and ask questions about your spending, inside the Anna desktop or cloud agent.
+- **On the web**: [wefinance-copilot.streamlit.app](https://wefinance-copilot.streamlit.app), the Streamlit version with the full dashboard.
+
+## What's New
+
+- **Anna App Store listing**: WeFinance now ships as an Anna app (`anna_app/`) with three bundled tools: bill scanning, the finance advisor, and recommendations.
+- **Overview tab**: budget health and spending trends at a glance, with a separate budget per currency instead of adding currencies together.
+- **October 2026 redesign**: a receipt-style interface, a new icon, and a new store page.
+- **Security hardening**: LLM output is escaped before rendering, scanned rows are rebuilt from known fields and validated, and receipt text is kept apart from the advisor's instructions.
 
 ---
 
 ## Overview
 
-WeFinance is a production-ready personal finance assistant that leverages state-of-the-art Vision LLM technology (GPT-4o Vision) to automate bill processing, provide conversational financial advice, and deliver explainable investment recommendations.
+WeFinance uses GPT-4o Vision to read bills directly, then layers a conversational advisor, explainable investment suggestions, and anomaly detection on top of the extracted transactions.
 
-**Core Innovation**: Direct structured data extraction from bill images using GPT-4o Vision API, achieving 100% recognition accuracy compared to 0% with traditional OCR approaches on synthetic images.
+On my test set of 10 bill images (72 transactions), every transaction was recognized correctly. See [OCR Recognition Accuracy](#ocr-recognition-accuracy) for the breakdown and how to rerun it.
 
 ### Key Capabilities
 
-- **Smart Bill Recognition**: Upload bill photos → 3-second extraction → Structured transaction data (100% accuracy)
-- **Conversational Financial Advisor**: Natural language Q&A with transaction context and budget awareness
-- **Explainable AI Recommendations**: Transparent investment advice with visible decision reasoning chains
-- **Proactive Anomaly Detection**: Real-time unusual spending detection with adaptive thresholds
-- **Business Cash-Flow Profile**: Aggregate view for sole proprietors and freelancers — merchant concentration, spending trend, and anomaly summary in one place
+- **Bill recognition**: upload a bill photo and get structured transaction data in about 3 seconds
+- **Multi-row screenshots**: payment app screenshots with 7-12 transactions are read row by row
+- **Conversational advisor**: natural language Q&A with transaction context and budget awareness
+- **Explainable recommendations**: investment suggestions with the decision reasoning shown
+- **Anomaly detection**: unusual spending flagged with adaptive thresholds
+- **Business cash-flow profile**: merchant concentration, spending trend, and anomaly summary for sole proprietors and freelancers
+- **Imports**: images, PDF (pages rendered with pypdfium2), and Excel
+- **Bilingual**: Simplified Chinese (default) and English, switchable in the sidebar
 
 ---
 
 ## The Problem
 
-Personal finance management suffers from several critical pain points:
-
 | Challenge | Traditional Approach | Limitation |
 |-----------|---------------------|------------|
-| **Manual Data Entry** | Type transactions from paper bills | Time-consuming (5-10 min/bill), error-prone |
-| **Fragmented Tools** | Separate apps for tracking, analysis, advice | Context loss, poor UX |
-| **Black-box AI** | Robo-advisors without explanations | Low trust, poor adoption |
-| **Reactive Fraud Detection** | Users discover fraud after occurrence | Financial loss, delayed response |
+| **Manual data entry** | Type transactions from paper bills | Slow (5-10 min per bill), error-prone |
+| **Fragmented tools** | Separate apps for tracking, analysis, advice | Context is lost between apps |
+| **Black-box AI** | Robo-advisors without explanations | Hard to trust |
+| **Late fraud detection** | Users find out after the fact | Money already lost |
 
 ---
 
 ## Technical Architecture
+
+WeFinance has two front ends that share the same services:
+
+- **Streamlit web app** (`app.py`, `pages/`, `modules/`, `services/`)
+- **Anna app** (`anna_app/`): a bundled web UI plus three executa tools (`wefinance-ocr`, `wefinance-chat`, `wefinance-recommend`)
 
 ### System Overview
 
@@ -71,79 +89,43 @@ graph TB
 
 ### Technology Stack
 
-| Layer | Technology | Version | Rationale |
-|-------|-----------|---------|-----------|
-| **Frontend** | Streamlit | 1.37+ | Rapid prototyping, Python-native |
-| **Vision OCR** | GPT-4o Vision | - | 100% accuracy, zero local dependencies |
-| **LLM Service** | GPT-4o API | - | Multi-modal understanding, cost-effective |
-| **Conversation** | LangChain | 0.2.10+ | Memory management, context assembly |
-| **Data Processing** | Pandas | 2.0+ | Time series analysis, aggregation |
-| **Visualization** | Plotly | 5.18+ | Interactive charts, responsive design |
-| **Environment** | Conda | - | Reproducible scientific computing setup |
+| Layer | Technology | Version |
+|-------|-----------|---------|
+| **Frontend** | Streamlit / Anna app bundle | 1.37+ |
+| **Vision OCR** | GPT-4o Vision (any OpenAI-compatible endpoint) | - |
+| **LLM** | GPT-4o | - |
+| **Conversation** | LangChain | 0.2.10+ |
+| **Data processing** | Pandas | 2.0+ |
+| **Visualization** | Plotly | 5.18+ |
+| **Environment** | Conda or pip | - |
 
 ---
 
-## Algorithm Deep Dive
+## How It Works
 
-### 1. Vision OCR Migration Journey
+### 1. From Local OCR to a Vision LLM
 
-**Phase 1: PaddleOCR Failure**
-- Attempted local OCR with PaddleOCR 2.7+ Chinese model
-- **Result**: 0% accuracy on synthetic bill images
-- **Root Cause**: Cannot recognize programmatically generated text
+I started with PaddleOCR and a Chinese model. It could not read my synthetic test bills at all, and it needed about 200MB of local models. Switching to GPT-4o Vision removed the local models and the preprocessing step, and it read both the synthetic bills and real photos in the test set correctly.
 
-**Phase 2: Vision LLM Breakthrough**
-- Replaced PaddleOCR with GPT-4o Vision API
-- **Result**: 100% accuracy on all test images (synthetic + real)
-- **Impact**: Removed 200MB model dependencies, simplified architecture
+Tradeoffs:
+- Cost: about $0.01 per image
+- Privacy: images are sent over HTTPS to the model provider and are not stored by WeFinance
 
-#### Comparative Performance
+### 2. Multi-row Bills
 
-| Metric | PaddleOCR | GPT-4o Vision | Improvement |
-|--------|-----------|---------------|-------------|
-| **Accuracy (Synthetic)** | 0% | 100% | +100% |
-| **Accuracy (Real Photos)** | ~60% | 100% | +67% |
-| **Processing Time** | 2-3s (OCR) + 1s (LLM) | 3s (total) | Simplified |
-| **Dependencies** | 200MB models | 0MB | -100% |
-| **Preprocessing** | Required | None | Eliminated |
-| **Cost per Image** | Free (local) | $0.01 | Acceptable tradeoff |
+The first prompt often returned only the first transaction of a multi-row bill. The fix was in the shape of the output, not the code: the prompt now asks the model to count the rows first, then extract each one, and the transactions array must match that count.
 
-**Decision Rationale**:
-- Accuracy justifies $0.01/image cost (100% vs 0% on synthetic images)
-- Images transmitted via HTTPS, not stored permanently (privacy tradeoff)
-- Simplified architecture accelerates development velocity
-
----
-
-### 2. Multi-line Recognition Enhancement
-
-**Problem**: LLM initially only recognized the first transaction in multi-row bills.
-
-**Root Cause Analysis**: Data structure issue, not token limits. LLM wasn't understanding "process each line" instruction.
-
-**Solution**: Applied "Fix data structure, not logic" principle
-
-**Prompt Engineering Innovation**:
 ```python
-# OLD PROMPT (30% success rate)
-"Extract all transactions from this bill image."
-
-# NEW PROMPT (100% success rate)
 """
-★ Step 1: Count transactions (how many rows with independent amounts?)
-★ Step 2: Extract each transaction's details row by row
-★ Ensure: transactions array length = transaction_count
+Step 1: Count transactions (how many rows with independent amounts?)
+Step 2: Extract each transaction's details row by row
+Ensure: transactions array length = transaction_count
 """
 ```
 
-**Impact**:
-- Multi-row recognition: 30% → 100% success rate
-- Real payment app screenshots: 7-12 transactions correctly identified
-- Zero logic changes (backward compatible)
+With this prompt, payment app screenshots with 7-12 transactions are read row by row, with no logic changes.
 
----
-
-### 3. Explainable AI (XAI) Architecture
+### 3. Explainable Recommendations
 
 **Design Philosophy**: XAI as core architectural component, not add-on feature.
 
@@ -179,53 +161,24 @@ Requirements:
 
 ---
 
-## Performance Benchmarks
+## OCR Recognition Accuracy
 
-### OCR Recognition Accuracy
+**Test set**: 10 bill images (3 synthetic, 7 real photos), 4-12 transactions per image, mixed categories (dining, shopping, transport).
 
-**Test Dataset**:
-- 10 bill images (3 synthetic + 7 real photos)
-- 4-12 transactions per image
-- Mixed categories (dining, shopping, transport)
+| Image Type | Transactions | Recognized |
+|-----------|--------------|------------|
+| **Synthetic bills** (3) | 11 | 11 |
+| **Real photos** (7) | 61 | 61 |
+| **Total** | **72** | **72** |
 
-**Results**:
+This is a small test set, so treat it as a sanity check rather than a benchmark.
 
-| Image Type | Transactions | Expected | Recognized | Accuracy |
-|-----------|--------------|----------|------------|----------|
-| **Synthetic Bills** (3) | 11 | 11 | 11 | 100% |
-| **Real Photos** (7) | 61 | 61 | 61 | 100% |
-| **Overall** | **72** | **72** | **72** | **100%** |
-
-**Key Insights**:
-- Zero failures across diverse image quality
-- Multi-line recognition flawless (up to 12 transactions/image)
-- Category classification 100% accurate
-
-**Validation**:
+**Rerun it**:
 ```bash
 python scripts/test_vision_ocr.py --show-details --dump-json
 # Logs: artifacts/ocr_test_results.log
 # JSON dumps: artifacts/ocr_results/*.json
 ```
-
----
-
-### System Performance
-
-**Production Metrics** (Streamlit Community Cloud):
-
-| Metric | Target | Actual | Status |
-|--------|--------|--------|--------|
-| **Vision OCR Response** | ≤5s | 2-3s | ✅ 40% faster |
-| **Chat Response** | ≤3s | 1-2s | ✅ 33% faster |
-| **Recommendation Gen** | ≤7s | 3-5s | ✅ 29% faster |
-| **Page Load** | ≤3s | 2s | ✅ 33% faster |
-| **Memory Footprint** | ≤500MB | 380MB | ✅ 24% lower |
-
-**Scalability**:
-- Batch upload: 10 images in 25s (2.5s/image average)
-- Concurrent users: 50 simultaneous sessions supported
-- Memory leak: Zero growth over 100 consecutive operations
 
 ---
 
@@ -325,36 +278,31 @@ python scripts/test_vision_ocr.py --show-details --dump-json
 
 ---
 
-## Project Roadmap
+## Roadmap
 
-### Current (v1.0)
-- ✅ GPT-4o Vision OCR (100% accuracy)
-- ✅ Conversational financial advisor
-- ✅ Explainable investment recommendations
-- ✅ Proactive anomaly detection
-- ✅ Bilingual support (zh_CN, en_US)
-- ✅ PDF/Excel bill import (`services/ocr_service.py`, PDF pages rendered via pypdfium2 then run through Vision OCR)
-- ✅ Business cash-flow profile view for sole proprietors/freelancers
+### Done
+- GPT-4o Vision bill recognition
+- Conversational financial advisor
+- Explainable investment recommendations
+- Anomaly detection
+- Bilingual support (zh_CN, en_US)
+- PDF/Excel bill import
+- Business cash-flow profile for sole proprietors and freelancers
+- Anna app with Overview tab and per-currency monthly budgets
 
-### Near-term (v1.1-v1.2)
-- [ ] Multi-currency conversion and reporting (currency is captured per-transaction today, but not converted/aggregated across currencies)
-- [ ] Export reports (PDF, Excel)
-- [ ] Mobile-responsive UI optimization
+### Next
+- [ ] Currency conversion and cross-currency reports (currencies are tracked separately today, not converted)
+- [ ] Report export (PDF, Excel)
+- [ ] Mobile-friendly Streamlit layout
 - [ ] Batch bill processing API
 
-### Mid-term (v2.0)
-- [ ] Integration with banking APIs (Plaid, Teller)
+### Later
+- [ ] Banking API integration (Plaid, Teller)
 - [ ] Recurring expense tracking and prediction
-- [ ] Budget goal setting and progress tracking
 - [ ] Multi-user support with data isolation
-- [ ] Advanced analytics dashboard (cashflow forecasting)
-
-### Long-term (v3.0+)
-- [ ] On-device OCR (privacy-first alternative)
-- [ ] Multi-modal financial coaching (voice + text)
-- [ ] Investment portfolio tracking integration
-- [ ] Tax optimization recommendations
-- [ ] Open financial data ecosystem (OFX, QIF export)
+- [ ] Cash-flow forecasting
+- [ ] On-device OCR as a privacy-first option
+- [ ] Open data export (OFX, QIF)
 
 ---
 
@@ -416,8 +364,7 @@ High-impact contributions:
 ## Community & Support
 
 - **Issues**: [GitHub Issues](https://github.com/calderbuild/WeFinance/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/calderbuild/WeFinance/discussions)
-- **Email**: calderbuilder@gmail.com
+- **Email**: johnrobertdestiny@gmail.com
 
 ### Join Our WeChat Community
 
