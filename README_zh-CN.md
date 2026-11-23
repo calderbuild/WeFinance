@@ -4,7 +4,6 @@
 
 > AI 个人财务助手。拍一张账单，视觉大模型把它整理成结构化交易记录，WeFinance 再帮你管预算、提醒异常消费，并解释它给出的建议。
 
-[![在线演示](https://img.shields.io/badge/Demo-Live-success)](https://wefinance-copilot.streamlit.app)
 [![Anna 应用商店](https://img.shields.io/badge/Anna-App%20Store-orange)](https://anna.partners/store/@calderbuild/wefinance?ref=github-zh)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
@@ -14,8 +13,8 @@
 
 ## 立即体验
 
-- **在 Anna 上使用**：[Anna 应用商店里的 WeFinance](https://anna.partners/store/@calderbuild/wefinance?ref=github-zh)。拍账单记账、设月度预算、按真实消费提问，直接在 Anna 桌面端或云端 agent 里用。
-- **网页版**：[wefinance-copilot.streamlit.app](https://wefinance-copilot.streamlit.app)，Streamlit 版本，带完整看板。
+- **在 Anna 上使用（推荐在线入口）**：[Anna 应用商店里的 WeFinance](https://anna.partners/store/@calderbuild/wefinance?ref=github-zh)。拍账单记账、设月度预算、按真实消费提问，直接在 Anna 桌面端或云端 agent 里用。
+- **本地 / 自托管网页版**：使用自己的 API Key 在本地或 Docker 中运行完整 Streamlit 看板（见 [快速开始](#快速开始) 与 [部署指南](./DEPLOY.md)）。原 Streamlit Community Cloud 公开演示已停用。
 
 ## 最新进展
 
@@ -313,7 +312,7 @@ python scripts/test_vision_ocr.py --show-details --dump-json
 - **[产品需求文档 (PRD v2.0)](./.claude/specs/wefinance-copilot/01-product-requirements.md)** - 功能规格说明
 - **[系统架构设计](./.claude/specs/wefinance-copilot/02-system-architecture.md)** - 详细架构
 - **[Sprint规划](./.claude/specs/wefinance-copilot/03-sprint-plan.md)** - 开发路线图
-- **[部署指南](./DEPLOY.md)** - Streamlit Cloud + Docker + K8s方案
+- **[部署指南](./DEPLOY.md)** - Anna 应用商店 + 本地 / Docker / K8s 自托管方案
 - **[仓库规范](./AGENTS.md)** - 编码标准、测试
 - **[Conda环境管理指南](./docs/CONDA_GUIDE.md)** - 环境管理
 
