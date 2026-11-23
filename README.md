@@ -4,7 +4,6 @@ English | **[中文](./README_zh-CN.md)**
 
 > AI personal finance assistant. Take a photo of a bill and a vision LLM turns it into structured transactions, then WeFinance tracks your budget, flags unusual spending, and explains its advice.
 
-[![Live Demo](https://img.shields.io/badge/Demo-Live-success)](https://wefinance-copilot.streamlit.app)
 [![Anna App Store](https://img.shields.io/badge/Anna-App%20Store-orange)](https://anna.partners/store/@calderbuild/wefinance?ref=github)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
@@ -14,8 +13,8 @@ English | **[中文](./README_zh-CN.md)**
 
 ## Try It
 
-- **On Anna**: [WeFinance in the Anna App Store](https://anna.partners/store/@calderbuild/wefinance?ref=github). Scan a bill, track a monthly budget, and ask questions about your spending, inside the Anna desktop or cloud agent.
-- **On the web**: [wefinance-copilot.streamlit.app](https://wefinance-copilot.streamlit.app), the Streamlit version with the full dashboard.
+- **On Anna (Hosted)**: [WeFinance in the Anna App Store](https://anna.partners/store/@calderbuild/wefinance?ref=github). Scan a bill, track a monthly budget, and ask questions about your spending, inside the Anna desktop or cloud agent.
+- **Self-hosted web dashboard**: run the Streamlit dashboard locally or in Docker with your own API key (see [Quick Start](#quick-start) and [Deployment Guide](./DEPLOY.md)). The old public Streamlit Community Cloud demo has been retired.
 
 ## What's New
 
@@ -313,7 +312,7 @@ python scripts/test_vision_ocr.py --show-details --dump-json
 - **[Product Requirements (PRD v2.0)](./.claude/specs/wefinance-copilot/01-product-requirements.md)** - Feature specifications
 - **[System Architecture](./.claude/specs/wefinance-copilot/02-system-architecture.md)** - Detailed architecture
 - **[Sprint Planning](./.claude/specs/wefinance-copilot/03-sprint-plan.md)** - Development roadmap
-- **[Deployment Guide](./DEPLOY.md)** - Streamlit Cloud + Docker + K8s
+- **[Deployment Guide](./DEPLOY.md)** - Anna App Store + Self-hosted / Docker / K8s
 - **[Repository Guidelines](./AGENTS.md)** - Coding standards, testing
 - **[Conda Environment Guide](./docs/CONDA_GUIDE.md)** - Environment management
 

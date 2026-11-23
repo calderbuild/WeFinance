@@ -8,9 +8,9 @@ WeFinance Copilot is an AI-powered personal finance assistant. It uses Vision LL
 
 **Key Architecture Decision**: Originally used PaddleOCR, but migrated to GPT-4o Vision OCR for 100% recognition accuracy (vs 0% with synthetic images). This is the core technical innovation.
 
-**Project Status**: Production-ready deployment. Live demo at https://wefinance-copilot.streamlit.app.
+**Project Status**: Active on Anna App Store (`https://anna.partners/store/@calderbuild/wefinance`) with a local/self-hosted Streamlit dashboard (`app.py`).
 
-**Deployment**: Primary deployment on Streamlit Community Cloud with automatic CI/CD from `main` branch. See DEPLOY.md for container deployment options.
+**Deployment**: Hosted distribution runs on Anna App Store (`anna_app/`); the public Streamlit Community Cloud demo was retired. See `DEPLOY.md` for local and Docker self-hosting options.
 
 ## Essential Commands
 
@@ -84,15 +84,10 @@ python scripts/test_vision_ocr.py --show-details --dump-json
 
 ### Deployment Commands
 
-#### Streamlit Community Cloud (Current Production)
+#### Local / Self-Hosted Streamlit Dashboard
 ```bash
-# No manual deployment needed - auto-deploys from GitHub on push to main
-# Live URL: https://wefinance-copilot.streamlit.app
-
-# Local preview before push
+# Local preview
 streamlit run app.py --server.port 8501
-
-# Check logs on Cloud Dashboard: https://share.streamlit.io/
 ```
 
 #### Docker Deployment (Optional)
@@ -383,37 +378,11 @@ def extract_transactions(image):
 
 ## Deployment Architecture
 
-### Current Production: Streamlit Community Cloud
+### Current Distribution: Anna App Store + Self-Hosted Streamlit
 
-**Live URL**: https://wefinance-copilot.streamlit.app
+**Anna App Store URL**: https://anna.partners/store/@calderbuild/wefinance
 
-**Deployment Flow**:
-```
-Local Development → Push to GitHub (main) → Auto-deploy to Streamlit Cloud → Live in 2-3 minutes
-```
-
-**Key Configuration**:
-- **Secrets Management**: Via Streamlit Cloud Dashboard (Settings → Secrets)
-- **Environment**: Python 3.10, automatically managed by Streamlit Cloud
-- **CI/CD**: Automatic on every push to `main` branch
-- **Logs**: Available in Streamlit Cloud Dashboard (Settings → Logs)
-
-**Streamlit Cloud Secrets** (configured in Dashboard, not committed to git):
-```toml
-# .streamlit/secrets.toml (template in repo as secrets.toml.example)
-OPENAI_API_KEY = "sk-your-api-key-here"
-OPENAI_BASE_URL = "https://newapi.deepwisdom.ai/v1"
-OPENAI_MODEL = "gpt-4o"
-LLM_PROVIDER = "openai"
-TZ = "Asia/Shanghai"
-```
-
-**Deployment Verification**:
-1. Push code to `main` branch
-2. Wait 2-3 minutes for auto-deployment
-3. Check Streamlit Cloud Dashboard for build status
-4. Test live app: Upload sample bill from `assets/sample_bills/`
-5. If errors, check Dashboard → Logs for stack traces
+The public Streamlit Community Cloud demo (`wefinance-copilot.streamlit.app`) has been retired to avoid 12-hour hibernation alerts and shared API-key exposure. The Streamlit dashboard (`app.py`) remains supported for local and self-hosted runs via `.env` (or optional private Streamlit/Docker deployments; see `DEPLOY.md`).
 
 ### Alternative Deployment: Docker + K8s
 
@@ -495,13 +464,10 @@ conda activate wefinance
 ```
 
 **Updating dependencies**:
-1. Modify `environment.yml` or `requirements.txt`
+1. Modify `environment.yml` or `requirements.txt` (keep both in sync)
 2. Run `conda env update -f environment.yml --prune`
-3. Test all functionality locally
-4. Commit changes to trigger Streamlit Cloud auto-redeploy
-5. Verify deployment on https://wefinance-copilot.streamlit.app
-
-**Important**: Streamlit Cloud reads `requirements.txt`, not `environment.yml`. Ensure dependencies are also listed in `requirements.txt` for cloud deployment.
+3. Test all functionality locally (`pytest tests/ -v` and `streamlit run app.py`)
+4. Open a PR and verify GitHub Actions `Tests` workflow passes
 
 ## Common Pitfalls
 
@@ -916,7 +882,7 @@ WeFinance/
 
 ### Branch Strategy
 
-**Main Branch**: `main` (production-ready, auto-deploys to Streamlit Cloud)
+**Main Branch**: `main` (protected by CI `Tests` workflow)
 
 **Development Flow**:
 ```bash
@@ -940,8 +906,7 @@ git commit -m "docs: update deployment guide with K8s instructions"
 git push origin feature/your-feature-name
 # Create PR on GitHub targeting main branch
 
-# After PR approval, merge to main
-# Streamlit Cloud auto-deploys within 2-3 minutes
+# After PR approval and green CI, merge to main
 ```
 
 **Commit Message Format** (see global CLAUDE.md):
@@ -960,22 +925,15 @@ git push origin feature/your-feature-name
 - [ ] API keys removed from code
 - [ ] Commit message follows conventional format
 
-### Deployment Status Check
+### Post-Merge Verification
 
 After merging to `main`:
-1. Visit https://share.streamlit.io/ (Streamlit Cloud Dashboard)
-2. Check deployment status (should show "Building..." → "Running")
-3. Wait 2-3 minutes for build completion
-4. Test live app at https://wefinance-copilot.streamlit.app
-5. If deployment fails, check logs in Dashboard → Logs
-6. Common failure causes:
-   - Missing dependencies in `requirements.txt`
-   - Secrets not configured in Streamlit Cloud
-   - Import errors (test locally first)
+1. Confirm GitHub Actions `Tests` workflow is green on `main`
+2. If `anna_app/` changed, follow the Anna release checklist in `CLAUDE.local.md` (cut from `origin/main` and verify frozen executa versions)
 
 ## For More Information
 
-- **Live Demo**: https://wefinance-copilot.streamlit.app
+- **Anna App Store**: https://anna.partners/store/@calderbuild/wefinance
 - **Project Overview**: See README.md (English) or README_zh-CN.md (Chinese)
 - **Deployment Guide**: See DEPLOY.md
 - **Repository Guidelines**: See AGENTS.md (Chinese guidelines for structure, testing, commits)

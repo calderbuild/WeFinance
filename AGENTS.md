@@ -40,4 +40,4 @@ black . && ruff check .                      # 统一格式化+静态检查
 ## 安全与配置提示
 - `.env` 通过 `cp .env.example .env` 初始化，仅填写代理 API Key、Base URL、模型名等敏感字段；不要上传真实凭据。
 - GPT-4o Vision OCR 为唯一识别路径，若需替换模型，务必更新 `services/vision_ocr_service.py` 并在 README/DEPLOY 记录。
-- 生产部署依赖 Streamlit Cloud 自动构建，推送前请确认 `requirements.txt` 与 `environment.yml` 同步，避免线上环境失配。
+- 在线托管入口为 Anna App Store（`anna_app/`）；本地及自托管网页版依赖 `requirements.txt` 与 `environment.yml`，更新依赖时请保持二者同步。
